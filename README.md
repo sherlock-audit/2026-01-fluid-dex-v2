@@ -118,6 +118,8 @@ In general, if bad debt happens and the protocol cannot handle, or socialise bad
 6. A token’s liquidity can be split between the DEX and the liquidity layer. As a result, certain operations, such as withdrawals or liquidations, may fail even when sufficient total liquidity exists, if the required liquidity is not available on the specific side needed to execute the transaction. This is a known and acceptable design risk. The rebalance function is expected to manage and mitigate this risk through regular rebalancing and should be considered trusted. Issues arising from this behaviour are therefore not considered valid findings.
 
 7. All lending protocols inherently carry the risk of high utilization, which can lead to situations where withdrawals are temporarily unavailable and liquidations may become stuck. The protocol’s risk management framework is assumed to be trusted in handling such scenarios, and issues arising from these conditions are considered known and acceptable and will not be treated as valid findings
+
+8. Any issues caused by bugs in Solidity versions 0.8.27-0.8.33 (i.e., caused by inherent Solidity bugs, not by the contract implementation) are considered known and OOS.
 ___
 
 ### Q: Please list any relevant protocol resources.
