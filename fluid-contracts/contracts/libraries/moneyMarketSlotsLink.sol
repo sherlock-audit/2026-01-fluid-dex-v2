@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 /// @notice library that helps in reading / working with storage slot data of Fluid Money Market.
 /// @dev as all data for Fluid Money Market is internal, any data must be fetched directly through manual

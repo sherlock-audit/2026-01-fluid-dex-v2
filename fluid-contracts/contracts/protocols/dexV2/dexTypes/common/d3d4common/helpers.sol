@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./variables.sol";
 import { BigMathMinified as BM } from "../../../../../libraries/bigMathMinified.sol";
@@ -7,6 +7,7 @@ import { FixedPointMathLib as FPM } from "solmate/src/utils/FixedPointMathLib.so
 import { DexV2D3D4CommonSlotsLink as DSL } from "../../../../../libraries/dexV2D3D4CommonSlotsLink.sol";
 import { FullMath as FM } from "@uniswap/v3-core/contracts/libraries/FullMath.sol";
 import { SqrtPriceMath as SPM } from "@uniswap/v3-core/contracts/libraries/SqrtPriceMath.sol";
+import { SafeCast } from "../../../../../libraries/safeCast.sol";
 
 abstract contract CommonHelpers is CommonVariables {
     modifier _onlyController(address controller_) {

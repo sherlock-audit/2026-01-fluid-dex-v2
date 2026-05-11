@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./variables.sol";
 
@@ -115,20 +115,20 @@ abstract contract Helpers is Variables {
             // part2 = (debtA * debtB * lowerPriceX96) / Q96
             // final x equals:
             // x = (part1 + (part2 + part1^2)^(1/2))
-            int256 p1_ = (int256(dx_ * gp_) - int256(dy_ * Q96)) / int256(2 * Q96);
+            int256 p1_ = (SafeCast.toInt256(dx_ * gp_) - SafeCast.toInt256(dy_ * Q96)) / SafeCast.toInt256(2 * Q96);
             uint256 p2_ = dx_ * dy_;
             p2_ = FM.mulDiv(p2_, pb_, Q96);
-            ry_ = uint256(p1_ + int256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
+            ry_ = uint256(p1_ + SafeCast.toInt256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
 
             /// @dev FINDING rx_
             // Because of mathematical symmetry, we convert the above formula to find rx_ by replacing:
             // dx_ <-> dy_
             // gp_ <-> Q192 / gp_
             // pb_ <-> Q192 / pa_
-            p1_ = (int256(dy_ * Q96) - int256(dx_ * gp_)) / (2 * int256(gp_));
+            p1_ = (SafeCast.toInt256(dy_ * Q96) - SafeCast.toInt256(dx_ * gp_)) / (2 * SafeCast.toInt256(gp_));
             p2_ = dy_ * dx_;
             p2_ = FM.mulDiv(p2_, Q96, pa_);
-            rx_ = uint256(p1_ + int256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
+            rx_ = uint256(p1_ + SafeCast.toInt256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
         }
     }
 
@@ -208,20 +208,20 @@ abstract contract Helpers is Variables {
             // part2 = realDebtReserveA * realDebtReserveB * (1<<96) / lowerPrice
             // final c equals:
             // c = (part1 + (part2 + part1^2)^(1/2))
-            int256 p1_ = (int256(ry_ * Q96) - int256(rx_ * gp_)) / (2 * int256(gp_));
+            int256 p1_ = (SafeCast.toInt256(ry_ * Q96) - SafeCast.toInt256(rx_ * gp_)) / (2 * SafeCast.toInt256(gp_));
             uint256 p2_ = rx_ * ry_;
             p2_ = FM.mulDiv(p2_, Q96, pb_);
-            dx_ = uint256(p1_ + int256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
+            dx_ = uint256(p1_ + SafeCast.toInt256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
 
             /// @dev FINDING z:
             // Because of mathematical symmetry, we convert the above formula to find dy_ by replacing:
             // rx_ <-> ry_
             // gp_ <-> Q192 / gp_
             // pb_ <-> Q192 / pa_
-            p1_ = (int256(rx_ * gp_) - int256(ry_ * Q96)) / (2 * int256(Q96));
+            p1_ = (SafeCast.toInt256(rx_ * gp_) - SafeCast.toInt256(ry_ * Q96)) / (2 * SafeCast.toInt256(Q96));
             p2_ = ry_ * rx_;
             p2_ = FM.mulDiv(p2_, pa_, Q96);
-            dy_ = uint256(p1_ + int256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
+            dy_ = uint256(p1_ + SafeCast.toInt256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
         }
     }
 

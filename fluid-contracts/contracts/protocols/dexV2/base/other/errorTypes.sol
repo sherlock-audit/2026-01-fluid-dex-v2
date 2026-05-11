@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./events.sol";
 
@@ -37,6 +37,12 @@ library ErrorTypes {
 
     /// @notice thrown when msg.value doesn't match the required amount
     uint256 internal constant DexV2AdminModule__MsgValueMismatch = 200010;
+
+    /// @notice thrown when token address has no bytecode (not a contract)
+    uint256 internal constant DexV2AdminModule__TokenNotAContract = 200011;
+
+    /// @notice thrown when both supply and borrow amounts are zero during rebalance
+    uint256 internal constant DexV2AdminModule__NothingToRebalance = 200012;
 
     /***********************************|
     |            Main Module            | 
@@ -77,6 +83,12 @@ library ErrorTypes {
 
     /// @notice thrown when action identifier doesn't match any known action
     uint256 internal constant DexV2Main__InvalidActionIdentifier = 201012;
+
+    /// @notice thrown when token address has no bytecode (not a contract)
+    uint256 internal constant DexV2Main__TokenNotAContract = 201013;
+
+    /// @notice thrown when withdraw amount exceeds stored token balance
+    uint256 internal constant DexV2Main__InsufficientStoredTokenAmount = 201014;
 
     /***********************************|
     |           Helpers Module          | 

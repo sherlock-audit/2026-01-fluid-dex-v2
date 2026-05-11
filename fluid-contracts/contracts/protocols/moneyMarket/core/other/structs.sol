@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./interfaces.sol";
 
@@ -10,6 +10,7 @@ import { PositionData } from "../../../dexV2/dexTypes/common/d3d4common/structs.
 
 struct StartOperationParams {
     bool isOperate;
+    bool estimate;
     uint256 positionType; 
     uint256 nftId; 
     uint256 nftConfig; 
@@ -53,7 +54,7 @@ struct HfInfo {
 }
 
 struct GetHfVariables {
-    IOracle oracle;
+    IMMOracle oracle;
     uint256 emode;
     uint256 numberOfPositions;
     uint256 normalizedCollateralValue;

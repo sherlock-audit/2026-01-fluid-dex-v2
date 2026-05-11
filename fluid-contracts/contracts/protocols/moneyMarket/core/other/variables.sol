@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./error.sol";
 
@@ -55,6 +55,7 @@ abstract contract ConstantVariables {
     uint256 internal constant NINE_DECIMALS = 1e9;
     uint256 internal constant TEN_DECIMALS = 1e10;
     uint256 internal constant EIGHTEEN_DECIMALS = 1e18;
+    uint256 internal constant TWENTY_SEVEN_DECIMALS = 1e27;
 
     uint256 internal constant ROUNDING_FACTOR = NINE_DECIMALS;
     uint256 internal constant ROUNDING_FACTOR_PLUS_ONE = ROUNDING_FACTOR + 1;
@@ -120,6 +121,8 @@ abstract contract ConstantVariables {
     bool internal constant IS_OPERATE = true;
     bool internal constant IS_LIQUIDATE = false;
 
+    bool internal constant IS_NOT_ESTIMATE = false;
+
     bool internal constant IS_COLLATERAL = true;
     bool internal constant IS_DEBT = false;
 
@@ -179,8 +182,8 @@ abstract contract StorageVariables is TransientVariables {
 
     // First 160 bits => 0   - 159 => Oracle Address
     // Next  10  bits => 160 - 169 => Max Positions per NFT
-    // Next  12  bits => 170 - 181 => Min Normalized Collateral Value (in 18 decimals) (If this is 1000, then it means 1000 * 1e18 of normalized collateral value is required to borrow)
-    // Next  18  bits => 182 - 199 => HF Limit for liquidation (10|8 big number) (in 18 decimals)
+    // Next  12  bits => 170 - 181 => Min Normalized Collateral Value (in 27 decimals) (If this is 1000, then it means 1000 * 1e27 of normalized collateral value is required to borrow)
+    // Next  18  bits => 182 - 199 => HF Limit for liquidation (10|8 big number) (in 27 decimals)
     // Next  12  bits => 200 - 211 => Total Number of tokens listed
     // Next  12  bits => 212 - 223 => Total Emodes listed
     // Next  32  bits => 224 - 255 => Total NFTs minted

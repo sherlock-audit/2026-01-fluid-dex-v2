@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./structs.sol";
 
 import { SqrtPriceMath as SPM } from "@uniswap/v3-core/contracts/libraries/SqrtPriceMath.sol";
 
 abstract contract Helpers is CommonImport {
+    function _encodePositionId(uint256 positionType_, DexKey memory dexKey_) internal pure returns (bytes32) {
+        return keccak256(abi.encode(positionType_, dexKey_));
+    }
+
+    function _encodeDexV2PositionId(int24 tickLower_, int24 tickUpper_, bytes32 positionSalt_) internal view returns (bytes32) {
+        return keccak256(abi.encode(address(this), tickLower_, tickUpper_, positionSalt_));
+    }
+
     function _feeSettle(address token_, uint256 feeAccrued_, uint256 feeCollection_, address to_) internal {
-        int256 supplyAmount_ = -int256(feeAccrued_);
-        int256 storeAmount_ = int256(feeAccrued_) - int256(feeCollection_);
+        int256 supplyAmount_ = -SafeCast.toInt256(feeAccrued_);
+        int256 storeAmount_ = SafeCast.toInt256(feeAccrued_) - SafeCast.toInt256(feeCollection_);
         if (!(supplyAmount_ == 0 && storeAmount_ == 0)) {
             DEX_V2.settle(token_, supplyAmount_, 0, storeAmount_, to_, IS_CALLBACK);
         }
@@ -16,13 +24,13 @@ abstract contract Helpers is CommonImport {
 
     function _withdrawSettle(address token_, uint256 amount_, uint256 feeAccrued_, address to_) internal {
         if (!(amount_ == 0 && feeAccrued_ == 0)) {
-            DEX_V2.settle(token_, -int256(amount_ + feeAccrued_), 0, int256(feeAccrued_), to_, IS_CALLBACK);
+            DEX_V2.settle(token_, -SafeCast.toInt256(amount_ + feeAccrued_), 0, SafeCast.toInt256(feeAccrued_), to_, IS_CALLBACK);
         }
     }
 
     function _borrowSettle(address token_, uint256 amount_, uint256 feeAccrued_, address to_) internal {
         if (!(amount_ == 0 && feeAccrued_ == 0)) {
-            DEX_V2.settle(token_, -int256(feeAccrued_), int256(amount_), int256(feeAccrued_), to_, IS_CALLBACK);
+            DEX_V2.settle(token_, -SafeCast.toInt256(feeAccrued_), SafeCast.toInt256(amount_), SafeCast.toInt256(feeAccrued_), to_, IS_CALLBACK);
         }
     }
 
@@ -33,7 +41,7 @@ abstract contract Helpers is CommonImport {
                 ethValue_ = amount_;
                 _msgValue -= ethValue_;
             }
-            DEX_V2.settle{value: ethValue_}(token_, int256(amount_) - int256(feeAccrued_), 0, int256(feeAccrued_), to_, IS_CALLBACK);
+            DEX_V2.settle{value: ethValue_}(token_, SafeCast.toInt256(amount_) - SafeCast.toInt256(feeAccrued_), 0, SafeCast.toInt256(feeAccrued_), to_, IS_CALLBACK);
         }
     }
 
@@ -44,7 +52,7 @@ abstract contract Helpers is CommonImport {
                 ethValue_ = amount_; 
                 _msgValue -= ethValue_; 
             }
-            DEX_V2.settle{value: ethValue_}(token_, -int256(feeAccrued_), -int256(amount_), int256(feeAccrued_), to_, IS_CALLBACK);
+            DEX_V2.settle{value: ethValue_}(token_, -SafeCast.toInt256(feeAccrued_), -SafeCast.toInt256(amount_), SafeCast.toInt256(feeAccrued_), to_, IS_CALLBACK);
         }
     }
 

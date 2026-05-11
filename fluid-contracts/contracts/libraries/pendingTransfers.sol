@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 /// @notice Library for managing pending token transfers using transient storage
 /// @dev These transfers are temporary and only exist within a single transaction
@@ -7,7 +7,7 @@ library PendingTransfers {
     // Custom errors
     error PendingSupplyNotCleared();
     error PendingBorrowNotCleared();
-    error PendingTransfersNotCleared();
+    error PendingTransfersNotCleared(bytes data_);
 
     // bytes32(uint256(keccak256("FLUID_DEX_V2_PENDING_SUPPLY")) - 1)
     bytes32 constant PENDING_SUPPLY_SLOT = 0x1f9fe0a780efbf168c8fd810da059a7db6663cde8eba217dd821a7835cf20a90;
@@ -211,7 +211,7 @@ library PendingTransfers {
 
     /// @notice Require that all pending transfers (both supply and borrow) have been cleared
     /// @dev Call this at the end of transactions to ensure all tokens are properly settled
-    function requireAllPendingTransfersCleared() internal view {
-        if(!allPendingTransfersCleared()) revert PendingTransfersNotCleared();
+    function requireAllPendingTransfersCleared(bytes memory data_) internal view {
+        if(!allPendingTransfersCleared()) revert PendingTransfersNotCleared(data_);
     }
 }
