@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import { BigMathMinified as BM } from "../../../../libraries/bigMathMinified.sol";
 import { LiquidityCalcs as LC } from "../../../../libraries/liquidityCalcs.sol";
@@ -11,10 +11,15 @@ import { TickMath as TM } from "lib/v3-core/contracts/libraries/TickMath.sol";
 import { MoneyMarketSlotsLink as MSL } from "../../../../libraries/moneyMarketSlotsLink.sol";
 import { LiquiditySlotsLink as LSL } from "../../../../libraries/liquiditySlotsLink.sol";
 import { SafeTransfer } from "../../../../libraries/safeTransfer.sol";
+import { SafeCast } from "../../../../libraries/safeCast.sol";
 
 import "./variables.sol";
 
 abstract contract CommonHelpers is Variables {
+    function _encodeLiquidityIdentifier(bytes32 actionIdentifier_) internal pure returns (bytes memory) {
+        return abi.encode(MONEY_MARKET_IDENTIFIER, actionIdentifier_);
+    }
+
     function _getGovernanceAddr() internal view returns (address governance_) {
         governance_ = address(uint160(LIQUIDITY.readFromStorage(LIQUIDITY_GOVERNANCE_SLOT)));
     }
@@ -73,7 +78,7 @@ abstract contract CommonHelpers is Variables {
     ) internal pure returns (DexKey memory dexKey_, int24 tickLower_, int24 tickUpper_) {
         dexKey_.token0 = address(uint160(token0Configs_));
         dexKey_.token1 = address(uint160(token1Configs_));
-        if (dexKey_.token0 == address(0) || dexKey_.token1 == address(0)) revert(); // Invalid token address
+        // if (dexKey_.token0 == address(0) || dexKey_.token1 == address(0)) revert(); // This check is not needed because we got the tokens from position data only
 
         if ((positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE_3_AND_4_IS_DYNAMIC_FEE_POOL) & X1 == 1) dexKey_.fee = DYNAMIC_FEE_FLAG;
         else dexKey_.fee = uint24((positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE_3_AND_4_FEE) & X17);
@@ -576,20 +581,20 @@ abstract contract CommonHelpers is Variables {
             // part2 = realDebtReserveA * realDebtReserveB * (1<<96) / lowerPrice
             // final c equals:
             // c = (part1 + (part2 + part1^2)^(1/2))
-            int256 p1_ = (int256(ry_ * Q96) - int256(rx_ * gp_)) / (2 * int256(gp_));
+            int256 p1_ = (SafeCast.toInt256(ry_ * Q96) - SafeCast.toInt256(rx_ * gp_)) / (2 * SafeCast.toInt256(gp_));
             uint256 p2_ = rx_ * ry_;
             p2_ = FM.mulDiv(p2_, Q96, pb_);
-            dx_ = uint256(p1_ + int256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
+            dx_ = uint256(p1_ + SafeCast.toInt256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
 
             /// @dev FINDING z:
             // Because of mathematical symmetry, we convert the above formula to find dy_ by replacing:
             // rx_ <-> ry_
             // gp_ <-> Q192 / gp_
             // pb_ <-> Q192 / pa_
-            p1_ = (int256(rx_ * gp_) - int256(ry_ * Q96)) / (2 * int256(Q96));
+            p1_ = (SafeCast.toInt256(rx_ * gp_) - SafeCast.toInt256(ry_ * Q96)) / (2 * SafeCast.toInt256(Q96));
             p2_ = ry_ * rx_;
             p2_ = FM.mulDiv(p2_, pa_, Q96);
-            dy_ = uint256(p1_ + int256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
+            dy_ = uint256(p1_ + SafeCast.toInt256(FPM.sqrt((p2_ + uint256(p1_ * p1_)))));
         }
     }
 
@@ -716,7 +721,7 @@ abstract contract CommonHelpers is Variables {
         }
 
         uint256 normalizedTokenValue_;
-        if (tokenValue_ > 0) {
+        if (tokenValue_ > 0 && normalizationFactor_ > 0) {
             // rounded down so protocol is on the winning side
             // NOTE: Using 2 steps to round down here so hf calculation doesnt break and stops liquidations
             normalizedTokenValue_ = ((tokenValue_ * normalizationFactor_) - 1) / THREE_DECIMALS;
@@ -732,7 +737,7 @@ abstract contract CommonHelpers is Variables {
     }
 
     function _getPrice(
-        IOracle oracle_, 
+        IMMOracle oracle_, 
         address token_, 
         uint256 tokenDecimals_, 
         uint256 emode_, 
@@ -742,9 +747,9 @@ abstract contract CommonHelpers is Variables {
         tokenPrice_ = oracle_.getPrice(token_, emode_, isOperate_, isCollateral_);
 
         if (isOperate_) {
-            if (tokenPrice_ < 1e9 || tokenPrice_ > 1e27) revert(); // Invalid price
+            if (tokenPrice_ < 1e9 || tokenPrice_ > 1e39) revert(); // Invalid price
         } else {
-            if (tokenPrice_ < 10 || tokenPrice_ > 1e27) revert(); // Invalid price
+            if (tokenPrice_ < 10 || tokenPrice_ > 1e39) revert(); // Invalid price
         }
         
         if (tokenDecimals_ < MAX_TOKEN_DECIMALS) {
@@ -776,8 +781,8 @@ abstract contract CommonHelpers is Variables {
         GetHfVariables memory v_;
         {
             uint256 moneyMarketVariables_ = _moneyMarketVariables;
-            v_.oracle = IOracle(address(uint160(moneyMarketVariables_))); // The first 160 bits of the token configs are the token address
-            hfInfo_.minNormalizedCollateralValue = ((moneyMarketVariables_ >> MSL.BITS_MONEY_MARKET_VARIABLES_MIN_NORMALIZED_COLLATERAL_VALUE) & X12) * EIGHTEEN_DECIMALS;
+            v_.oracle = IMMOracle(address(uint160(moneyMarketVariables_))); // The first 160 bits of the token configs are the token address
+            hfInfo_.minNormalizedCollateralValue = ((moneyMarketVariables_ >> MSL.BITS_MONEY_MARKET_VARIABLES_MIN_NORMALIZED_COLLATERAL_VALUE) & X12) * TWENTY_SEVEN_DECIMALS;
         }
 
         {
@@ -1051,7 +1056,7 @@ abstract contract CommonHelpers is Variables {
         if (hfInfo_.debtValue == 0) {
             hfInfo_.hf = type(uint256).max;
         } else {
-            hfInfo_.hf = (hfInfo_.normalizedCollateralValue * EIGHTEEN_DECIMALS) / hfInfo_.debtValue;
+            hfInfo_.hf = (hfInfo_.normalizedCollateralValue * TWENTY_SEVEN_DECIMALS) / hfInfo_.debtValue;
         }
 
         return hfInfo_;
@@ -1062,7 +1067,7 @@ abstract contract CommonHelpers is Variables {
         if (hfInfo_.debtValue != 0) {
             // We will revert if the collateral is too small, because that will make liquidations uneconomical
             if (isOperate_ && hfInfo_.normalizedCollateralValue < hfInfo_.minNormalizedCollateralValue) revert FluidMoneyMarketError(ErrorTypes.Helpers__HealthFactorFailed);
-            if (hfInfo_.hf < EIGHTEEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.Helpers__HealthFactorFailed);
+            if (hfInfo_.hf < TWENTY_SEVEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.Helpers__HealthFactorFailed);
         }
     }
 }

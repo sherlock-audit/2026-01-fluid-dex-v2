@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity >=0.8.21 <=0.8.29;
+pragma solidity >=0.8.21 <=0.8.34;
 
 abstract contract ConstantVariables {
     /// @dev Storage slot with the admin of the contract. Logic from "proxy.sol".

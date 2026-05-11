@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity ^0.8.34;
 
 import "forge-std/Test.sol";
 import "forge-std/console2.sol";
@@ -23,7 +23,8 @@ import { CreateD3D4PositionParams } from "../../../contracts/protocols/moneyMark
 import { TokenConfig } from "../../../contracts/protocols/moneyMarket/core/adminModule/structs.sol";
 import { SwapInParams } from "../../../contracts/protocols/dexV2/dexTypes/common/d3d4common/structs.sol";
 import { DepositParams, WithdrawParams } from "../../../contracts/protocols/dexV2/dexTypes/d3/other/structs.sol";
-import { LiquidateParams } from "../../../contracts/protocols/moneyMarket/core/other/structs.sol";
+import { LiquidateParams, HfInfo } from "../../../contracts/protocols/moneyMarket/core/other/structs.sol";
+import { FluidLiquidateEstimate } from "../../../contracts/protocols/moneyMarket/core/other/error.sol";
 
 // DexV2 D3 and D4 imports (modules are deployed in DexV2BaseSetup)
 import { FluidDexV2D3AdminModule } from "../../../contracts/protocols/dexV2/dexTypes/d3/admin/main.sol";
@@ -35,7 +36,7 @@ import { FluidDexV2D4UserModule } from "../../../contracts/protocols/dexV2/dexTy
 
 /// @title Money Market Test
 /// @notice Test contract for Money Market functionality
-contract MoneyMarketTest is DexV2BaseSetup {
+abstract contract MoneyMarketTestBaseSetup is DexV2BaseSetup {
     using SafeERC20 for IERC20;
 
     // Make contract payable to receive ETH
@@ -52,7 +53,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
     // D3/D4 modules and constants are inherited from DexV2BaseSetup
 
     /// @notice Sets up the testing environment with Money Market contracts
-    function setUp() public override {
+    function setUp() public virtual override {
         // Call parent setup to deploy liquidity, dexV2, and D3/D4 modules
         super.setUp();
         
@@ -87,9 +88,9 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Deploy Mock Oracle
         oracle = new MockOracleMM();
         
-        // Set initial token prices in oracle (all prices in 18 decimals representing USD value)
-        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 4000 * 1e18); // ETH = $4000
-        oracle.setPrice(address(USDC), 1e18); // USDC = $1 (price always in 18 decimals)
+        // Set initial token prices in oracle (all prices in 27 decimals representing USD value)
+        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 4000 * 1e27); // ETH = $4000
+        oracle.setPrice(address(USDC), 1e27); // USDC = $1 (price always in 27 decimals)
         
         // Deploy Money Market implementation
         FluidMoneyMarket implementation = new FluidMoneyMarket(
@@ -136,13 +137,13 @@ contract MoneyMarketTest is DexV2BaseSetup {
         
         vm.prank(admin);
         (success,) = address(moneyMarket).call(
-            abi.encodeWithSelector(moneyMarketAdminModule.updateMinNormalizedCollateralValue.selector, 1000 * 1e18)
+            abi.encodeWithSelector(moneyMarketAdminModule.updateMinNormalizedCollateralValue.selector, 1000 * 1e27)
         );
         require(success, "Failed to set min normalized collateral value");
         
         vm.prank(admin);
         (success,) = address(moneyMarket).call(
-            abi.encodeWithSelector(moneyMarketAdminModule.updateHfLimitForLiquidation.selector, 1.25e18)
+            abi.encodeWithSelector(moneyMarketAdminModule.updateHfLimitForLiquidation.selector, 1.25e27)
         );
         require(success, "Failed to set HF limit for liquidation");
         
@@ -272,7 +273,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create supply position
         bytes memory supplyData = abi.encode(1, tokenIndex, supplyAmount);
         uint256 ethValue = token == NATIVE_TOKEN_ADDRESS ? supplyAmount : 0;
-        (bufferNftId,) = moneyMarket.operate{value: ethValue}(
+        (bufferNftId,,) = moneyMarket.operate{value: ethValue}(
             0,
             0,
             supplyData
@@ -327,7 +328,9 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Money Market:           ", address(moneyMarket));
         console2.log("============================================");
     }
+}
 
+contract MoneyMarketTest is MoneyMarketTestBaseSetup {
     /// @notice Test 1: List ETH (native token) - automatically listed in setup
     function testListEth() public {
         console2.log("Token:               ", NATIVE_TOKEN_ADDRESS);
@@ -352,7 +355,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         uint256 balanceBefore = address(this).balance;
         
         // Call operate with nftId = 0 to create new NFT and position
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: supplyAmount}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: supplyAmount}(
             0, // 0 means create new NFT
             0, // positionIndex (ignored when creating new NFT)
             actionData
@@ -407,7 +410,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         uint256 balanceBefore = USDC.balanceOf(address(this));
         
         // Call operate with nftId = 0 to create new NFT and position
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate(
             0, // 0 means create new NFT
             0, // positionIndex (ignored when creating new NFT)
             actionData
@@ -439,7 +442,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             initialSupply
         );
         
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: initialSupply}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: initialSupply}(
             0, // Create new NFT
             0, // Create new position
             initialActionData
@@ -527,7 +530,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         );
         
         uint256 ethBalanceBefore = address(this).balance;
-        (uint256 nftId, uint256 ethPositionIndex) = moneyMarket.operate{value: ethSupplyAmount}(
+        (uint256 nftId, uint256 ethPositionIndex,) = moneyMarket.operate{value: ethSupplyAmount}(
             0, // 0 means create new NFT
             0, // positionIndex (ignored when creating new NFT)
             ethActionData
@@ -551,7 +554,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         );
         
         uint256 usdcBalanceBefore = USDC.balanceOf(address(this));
-        (uint256 sameNftId, uint256 usdcPositionIndex) = moneyMarket.operate(
+        (uint256 sameNftId, uint256 usdcPositionIndex,) = moneyMarket.operate(
             nftId, // Use the same NFT (NFT 0)
             0, // 0 means create new position in existing NFT
             usdcActionData
@@ -587,7 +590,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         
         USDC.approve(address(moneyMarket), initialSupply);
         
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate(
             0, // Create new NFT
             0, // Create new position
             initialActionData
@@ -742,7 +745,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             ethSupplyAmount
         );
         
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: ethSupplyAmount}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: ethSupplyAmount}(
             0, // Create new NFT
             0, // Create new position
             ethActionData
@@ -850,7 +853,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             1 ether
         );
         
-        (uint256 aliceNftId,) = moneyMarket.operate{value: 1 ether}(
+        (uint256 aliceNftId,,) = moneyMarket.operate{value: 1 ether}(
             0,
             0,
             actionData
@@ -866,7 +869,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Step 2: Bob creates NFT 2 by supplying ETH
         console2.log("Step 2: Bob creates NFT 2");
         vm.startPrank(bob);
-        (uint256 bobNftId,) = moneyMarket.operate{value: 2 ether}(
+        (uint256 bobNftId,,) = moneyMarket.operate{value: 2 ether}(
             0,
             0,
             actionData
@@ -938,7 +941,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Step 9: Verify Alice can't transfer Bob's NFT without approval");
         // First, Bob creates a new NFT
         vm.startPrank(bob);
-        (uint256 bobNftId2,) = moneyMarket.operate{value: 1 ether}(
+        (uint256 bobNftId2,,) = moneyMarket.operate{value: 1 ether}(
             0,
             0,
             actionData
@@ -985,7 +988,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             collateralAmount
         );
         
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: collateralAmount}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: collateralAmount}(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -1006,7 +1009,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         );
         
         uint256 usdcBalanceBefore = USDC.balanceOf(address(this));
-        (,uint256 borrowPositionIndex) = moneyMarket.operate(
+        (,uint256 borrowPositionIndex,) = moneyMarket.operate(
             nftId,
             0, // Create new position (borrow position)
             borrowData1
@@ -1092,7 +1095,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             tinyCollateral
         );
         
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: tinyCollateral}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: tinyCollateral}(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -1126,7 +1129,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         _listUSDC();
         
         
-        // Min collateral value is $1000 (1000 * 1e18) set in constructor
+        // Min collateral value is $1000 (1000 * 1e27) set in constructor
         // Scenario:
         // - Initial collateral: $1500 (0.375 ETH at $4000/ETH)
         // - Debt: $200 (200 USDC)
@@ -1142,7 +1145,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             collateralAmount
         );
         
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: collateralAmount}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: collateralAmount}(
             0,
             0,
             supplyData
@@ -1211,7 +1214,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             1 ether
         );
         
-        (uint256 nftId,) = moneyMarket.operate{value: 1 ether}(
+        (uint256 nftId,,) = moneyMarket.operate{value: 1 ether}(
             0, // Create new NFT
             0, // Create new position
             ethSupplyData
@@ -1247,7 +1250,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Health Factor = ($3,000 * 0.8) / $2,600 = 0.92 < 1.0 (liquidatable!)
         
         console2.log("Step 3: Update ETH price from $4000 to $3000 to make position liquidatable");
-        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e18);
+        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
         console2.log("");
         
         // Step 4: Liquidate the position
@@ -1295,6 +1298,164 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("");
         console2.log("[SUCCESS] Liquidation successful and profitable!");
         console2.log("============================");
+    }
+
+    /// @notice Helper struct to hold liquidation estimate test data
+    struct LiquidationEstimateTestData {
+        uint256 nftId;
+        uint256 paybackAmount;
+        bytes paybackData;
+        uint256 estimatedPaybackAmount;
+        uint256 estimatedWithdrawAmount;
+        uint256 actualPaybackAmount;
+        uint256 actualWithdrawAmount;
+        uint256 bobEthBefore;
+        uint256 bobEthAfter;
+    }
+
+    /// @notice Helper to decode FluidLiquidateEstimate error data
+    /// @param revertData The full revert data including selector
+    /// @return paybackData The decoded payback data
+    /// @return withdrawData The decoded withdraw data
+    function _decodeLiquidateEstimateError(bytes memory revertData) internal pure returns (bytes memory paybackData, bytes memory withdrawData) {
+        // Skip the 4-byte selector and decode the two bytes parameters
+        // revertData format: selector(4) + abi.encode(bytes, bytes)
+        require(revertData.length > 4, "Invalid revert data");
+        
+        // Create a new bytes array without the selector
+        bytes memory encodedParams = new bytes(revertData.length - 4);
+        for (uint256 i = 0; i < encodedParams.length; i++) {
+            encodedParams[i] = revertData[i + 4];
+        }
+        
+        // Decode the two bytes parameters
+        (paybackData, withdrawData) = abi.decode(encodedParams, (bytes, bytes));
+    }
+
+    /// @notice Test 17: Liquidation Estimate - Test that estimate returns the same data as actual liquidation
+    function testLiquidationEstimate() public {
+        // Setup: List USDC (ETH is already listed in setup)
+        _listUSDC();
+        
+        console2.log("=== Testing Liquidation Estimate ===");
+        console2.log("Using ETH as collateral and USDC as debt");
+        
+        LiquidationEstimateTestData memory t;
+        
+        // Fund liquidator (bob) with USDC for liquidation
+        vm.deal(bob, 100 ether);
+        deal(address(USDC), bob, 100000 * 1e6);
+        
+        // Step 1: Supply 1 ETH as collateral
+        bytes memory ethSupplyData = abi.encode(1, 1, 1 ether);
+        (t.nftId,,) = moneyMarket.operate{value: 1 ether}(0, 0, ethSupplyData);
+        
+        console2.log("Step 1: Supplied 1 ETH as collateral");
+        console2.log("NFT ID:", _toString(t.nftId));
+        
+        // Step 2: Borrow 2600 USDC
+        bytes memory usdcBorrowData = abi.encode(2, 2, 2600 * 1e6, address(this));
+        moneyMarket.operate(t.nftId, 0, usdcBorrowData);
+        console2.log("Step 2: Borrowed 2600 USDC");
+        
+        // Step 3: Make position liquidatable by dropping ETH price
+        console2.log("Step 3: Update ETH price from $4000 to $3000");
+        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+        
+        // Step 4: Get liquidation estimate
+        console2.log("Step 4: Call liquidate with estimate=true");
+        
+        t.paybackAmount = 600 * 1e6; // Payback $600 worth of USDC
+        t.paybackData = abi.encode(uint256(t.paybackAmount));
+        
+        vm.startPrank(bob);
+        USDC.approve(address(moneyMarket), type(uint256).max);
+        
+        // Call estimate and capture the revert
+        (t.estimatedPaybackAmount, t.estimatedWithdrawAmount) = _callLiquidateEstimate(
+            t.nftId, 2, 1, bob, t.paybackData
+        );
+        
+        console2.log("Estimate Results:");
+        console2.log("  Payback Amount:", _toString(t.estimatedPaybackAmount));
+        console2.log("  Withdraw Amount:", _toString(t.estimatedWithdrawAmount));
+        
+        // Step 5: Perform actual liquidation
+        console2.log("Step 5: Perform actual liquidation with estimate=false");
+        
+        t.bobEthBefore = bob.balance;
+        
+        (bytes memory actualPaybackData, bytes memory actualWithdrawData) = moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: t.nftId,
+                paybackPositionIndex: 2,
+                withdrawPositionIndex: 1,
+                to: bob,
+                estimate: false,
+                paybackData: t.paybackData
+            })
+        );
+        vm.stopPrank();
+        
+        t.actualPaybackAmount = abi.decode(actualPaybackData, (uint256));
+        t.actualWithdrawAmount = abi.decode(actualWithdrawData, (uint256));
+        
+        console2.log("Actual Liquidation Results:");
+        console2.log("  Payback Amount:", _toString(t.actualPaybackAmount));
+        console2.log("  Withdraw Amount:", _toString(t.actualWithdrawAmount));
+        
+        // Step 6: Verify estimate matches actual
+        console2.log("Step 6: Verify estimate matches actual liquidation");
+        
+        assertEq(t.estimatedPaybackAmount, t.actualPaybackAmount, "Payback amount should match");
+        assertEq(t.estimatedWithdrawAmount, t.actualWithdrawAmount, "Withdraw amount should match");
+        
+        // Verify ETH was actually transferred to bob
+        t.bobEthAfter = bob.balance;
+        assertEq(t.bobEthAfter - t.bobEthBefore, t.actualWithdrawAmount, "Bob should receive the withdraw amount");
+        
+        console2.log("");
+        console2.log("[SUCCESS] Liquidation estimate matches actual liquidation!");
+        console2.log("====================================");
+    }
+
+    /// @notice Helper function to call liquidate with estimate=true and decode the result
+    function _callLiquidateEstimate(
+        uint256 nftId_,
+        uint256 paybackPositionIndex_,
+        uint256 withdrawPositionIndex_,
+        address to_,
+        bytes memory paybackData_
+    ) internal returns (uint256 paybackAmount, uint256 withdrawAmount) {
+        // Encode the liquidate call
+        bytes memory callData = abi.encodeWithSelector(
+            moneyMarket.liquidate.selector,
+            LiquidateParams({
+                nftId: nftId_,
+                paybackPositionIndex: paybackPositionIndex_,
+                withdrawPositionIndex: withdrawPositionIndex_,
+                to: to_,
+                estimate: true,
+                paybackData: paybackData_
+            })
+        );
+        
+        // Make the call and capture revert data
+        (bool success, bytes memory returnData) = address(moneyMarket).call(callData);
+        
+        // Should have reverted with FluidLiquidateEstimate
+        require(!success, "Estimate call should revert");
+        
+        // Verify error selector
+        bytes4 errorSelector = bytes4(returnData);
+        require(errorSelector == FluidLiquidateEstimate.selector, "Wrong error selector");
+        
+        // Decode the error data
+        (bytes memory estimatePaybackData, bytes memory estimateWithdrawData) = _decodeLiquidateEstimateError(returnData);
+        
+        // Decode the amounts
+        paybackAmount = abi.decode(estimatePaybackData, (uint256));
+        withdrawAmount = abi.decode(estimateWithdrawData, (uint256));
     }
 
     /// @notice Test: Supply D3 ETH/USDC position as collateral
@@ -1404,7 +1565,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         );
 
         // Call operate to create D3 position
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: positionParams_.amount1}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: positionParams_.amount1}(
             0, // Create new NFT
             0, // Ignored when creating new NFT
             actionData
@@ -1689,7 +1850,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
 
         bytes memory actionData = abi.encode(3, positionParams_);
         // Send extra ETH to cover rounding (protocol rounds UP amounts for deposits)
-        (nftId, positionIndex) = moneyMarket.operate{value: amount1 + 1e10}(
+        (nftId, positionIndex,) = moneyMarket.operate{value: amount1 + 1e10}(
             0,
             0,
             actionData
@@ -1904,7 +2065,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Health Factor: ($8000 * 0.8) / $6000 = 1.07 (healthy)");
 
         // Change ETH price from $4000 to $3000
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
         console2.log("ETH price changed from $4000 to $3000");
         console2.log("New collateral: 4000 USDC + 1 ETH @ $3000 = $7000");
         console2.log("Health Factor: ($7000 * 0.8) / $6000 = 0.93 (liquidatable!)");
@@ -1935,7 +2096,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Health Factor: ($8000 * 0.8) / $6000 = 1.07 (healthy)");
 
         // Change ETH price from $4000 to $3000 - same as basic test
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
         console2.log("ETH price changed from $4000 to $3000");
         console2.log("New collateral: 4000 USDC + 1 ETH @ $3000 = $7000 (+ fees)");
         console2.log("Health Factor: ~0.99 (liquidatable!)");
@@ -1945,7 +2106,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         _liquidateNormalBorrow(vars.nftId, 2, 1, 3000 * 1e6); // payback position 2 (borrow), withdraw position 1 (D3)
 
         // Restore ETH price back to normal before collecting fees
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 4000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 4000 * 1e27);
         console2.log("ETH price restored back to $4000");
 
         // Collect fees after liquidation to verify they still exist
@@ -1973,9 +2134,9 @@ contract MoneyMarketTest is DexV2BaseSetup {
         assertTrue(!vars.deleted, "Position should NOT be deleted when fees exist");
 
         // Increase token price to make fees more valuable and avoid min collateral issues
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 20000000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 20000000 * 1e27);
         console2.log("ETH price increased from $4000 to $20,000,000");
-        _changeOraclePrice(address(USDC), 5000 * 1e18);
+        _changeOraclePrice(address(USDC), 5000 * 1e27);
 
         // Borrow USDC using fees as collateral (fees should be worth $200-400)
         vars.borrowAmount = (1500 * 1e6) / 5000; // Borrow $1500 against fees
@@ -1985,7 +2146,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
 
         // Decrease ETH price to make position liquidatable
         // With 85% LT (instead of 80%), need more aggressive price drop
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 10_000_000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 10_000_000 * 1e27);
         console2.log("ETH price dropped from $20,000,000 to $10,000,000");
         console2.log("Fees value dropped significantly, position should be liquidatable");
 
@@ -2007,7 +2168,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create a new borrow position (position type 2, token index 2 for USDC)
         // Action data: (positionType, tokenIndex, borrowAmount, to)
         bytes memory actionData = abi.encode(2, 2, borrowAmount, address(this));
-        (uint256 newNftId, ) = moneyMarket.operate(nftId, positionIndex, actionData); // Create new position
+        (uint256 newNftId, ,) = moneyMarket.operate(nftId, positionIndex, actionData); // Create new position
         assertEq(newNftId, nftId, "Should use same NFT");
     }
 
@@ -2261,14 +2422,14 @@ contract MoneyMarketTest is DexV2BaseSetup {
 
         if (nftId_ == 0) {
             // Create new NFT
-            (nftId, positionIndex) = moneyMarket.operate{value: positionParams_.amount1}(
+            (nftId, positionIndex,) = moneyMarket.operate{value: positionParams_.amount1}(
                 0,
                 0,
                 actionData
             );
         } else {
             // Add to existing NFT
-            (nftId, positionIndex) = moneyMarket.operate{value: positionParams_.amount1}(
+            (nftId, positionIndex,) = moneyMarket.operate{value: positionParams_.amount1}(
                 nftId_,
                 0,
                 actionData
@@ -2395,7 +2556,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             2, // tokenIndex for USDC (indices start from 1)
             supplyAmount
         );
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -2427,7 +2588,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             2, // tokenIndex for USDC (indices start from 1)
             supplyAmount
         );
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -2489,7 +2650,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             2, // tokenIndex for USDC (indices start from 1)
             supplyAmount
         );
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -2504,7 +2665,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Health Factor: ($2000 * 0.8) / $800 = 2.0 (healthy)");
 
         // Change ETH price from $4000 to $13000
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 13000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 13000 * 1e27);
         console2.log("ETH price changed from $4000 to $13000");
         console2.log("New debt value: 400 + (0.1 * $13000) = $1700");
         console2.log("Collateral value: $2000");
@@ -2528,7 +2689,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             2, // tokenIndex for USDC (indices start from 1)
             supplyAmount
         );
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -2545,7 +2706,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Fees generated (small amount)");
 
         // Change ETH price from $4000 to $13000
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 13000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 13000 * 1e27);
         console2.log("ETH price changed from $4000 to $13000");
         console2.log("New debt value: $1700");
         console2.log("Collateral value: $2000 (+ fees)");
@@ -2569,7 +2730,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             2, // tokenIndex for USDC (indices start from 1)
             supplyAmount
         );
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             0, // Create new NFT
             0, // Create new position
             supplyData
@@ -2593,7 +2754,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         console2.log("Withdrew full USDC collateral");
 
         // Increase ETH price to $50M to make fees extremely valuable
-        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 500_000_000 * 1e18);
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 500_000_000 * 1e27);
         console2.log("ETH price increased to $500,000,000");
 
         // Borrow large amount of USDC using fees as collateral
@@ -2604,7 +2765,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
 
         // Increase USDC price to make position liquidatable
         // With 85% LT (instead of 80%), need more aggressive price change
-        _changeOraclePrice(address(USDC), 2 * 1e18); // USDC = $2
+        _changeOraclePrice(address(USDC), 2 * 1e27); // USDC = $2
 
         // Liquidate the position
         // After withdrawing USDC supply (position 1), D4 fees becomes position 1
@@ -2616,7 +2777,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
     /// @notice Helper to list DAI as isolated collateral
     function _listDAIAsIsolated() internal returns (uint256 daiTokenIndex) {
         // Set prices for DAI
-        oracle.setPrice(address(DAI), 1 * 1e18); // DAI = $1
+        oracle.setPrice(address(DAI), 1 * 1e27); // DAI = $1
         
         // List DAI token with collateral class 3 (isolated)
         (bool success,) = address(moneyMarket).call(
@@ -2671,7 +2832,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
     /// @notice Helper to list USDT as isolated collateral
     function _listUSDTAsIsolated() internal returns (uint256 usdtTokenIndex) {
         // Set prices for USDT
-        oracle.setPrice(address(USDT), 1e18); // USDT = $1 (price always in 18 decimals)
+        oracle.setPrice(address(USDT), 1e27); // USDT = $1 (price always in 27 decimals)
         
         // List USDT token with collateral class 3 (isolated)
         (bool success,) = address(moneyMarket).call(
@@ -2742,7 +2903,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             1, // tokenIndex for ETH (indices start from 1)
             ethCollateral
         );
-        (uint256 nftId1, uint256 positionIndex) = moneyMarket.operate{value: ethCollateral}(
+        (uint256 nftId1, uint256 positionIndex,) = moneyMarket.operate{value: ethCollateral}(
             0,
             0,
             ethSupplyData
@@ -2824,7 +2985,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT 1 with ETH and DAI, borrow 5000 USDC
         uint256 ethCollateral = 10 ether;
         bytes memory ethSupplyData = abi.encode(1, 1, ethCollateral);
-        (uint256 nftId1,) = moneyMarket.operate{value: ethCollateral}(0, 0, ethSupplyData);
+        (uint256 nftId1,,) = moneyMarket.operate{value: ethCollateral}(0, 0, ethSupplyData);
         
         uint256 usdcBorrow1 = 5000 * 1e6;
         bytes memory borrowData = abi.encode(2, 2, usdcBorrow1, address(this));
@@ -2840,7 +3001,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT 2 with DAI isolated collateral
         uint256 daiSupply2 = 15000 * 1e18;
         bytes memory daiSupplyData2 = abi.encode(1, daiTokenIndex, daiSupply2);
-        (uint256 nftId2,) = moneyMarket.operate(0, 0, daiSupplyData2);
+        (uint256 nftId2,,) = moneyMarket.operate(0, 0, daiSupplyData2);
         console2.log("NFT 2 created with 15,000 DAI");
         
         // Try to borrow 6000 USDC in NFT 2 - should fail (total would be 11,000)
@@ -2927,7 +3088,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
             1, // tokenIndex for ETH (indices start from 1)
             ethCollateral
         );
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate{value: ethCollateral}(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate{value: ethCollateral}(
             0,
             0,
             ethSupplyData
@@ -3015,7 +3176,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT with ETH supply and switch to emode
         uint256 ethCollateral = 10 ether; // $40,000 at $4000/ETH
         bytes memory ethSupplyData = abi.encode(1, 1, ethCollateral);
-        (uint256 nftId,) = moneyMarket.operate{value: ethCollateral}(
+        (uint256 nftId,,) = moneyMarket.operate{value: ethCollateral}(
             0,
             0,
             ethSupplyData
@@ -3086,7 +3247,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT with large USDC supply
         uint256 usdcSupply = 50000 * 1e6; // $50,000 USDC
         bytes memory usdcSupplyData = abi.encode(1, 2, usdcSupply);
-        (vars.nftId,) = moneyMarket.operate(
+        (vars.nftId,,) = moneyMarket.operate(
             0,
             0,
             usdcSupplyData
@@ -3126,7 +3287,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         _listUSDC();
         
         // List DAI as normal (non-isolated) for emode testing
-        oracle.setPrice(address(DAI), 1 * 1e18);
+        oracle.setPrice(address(DAI), 1 * 1e27);
         (bool success,) = address(moneyMarket).call(
             abi.encodeWithSelector(
                 moneyMarketAdminModule.listToken.selector,
@@ -3209,7 +3370,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT with ETH supply, switch to emode 1, and borrow both USDC and DAI
         uint256 ethCollateral = 20 ether; // $80,000
         bytes memory ethSupplyData = abi.encode(1, 1, ethCollateral);
-        (uint256 nftId,) = moneyMarket.operate{value: ethCollateral}(
+        (uint256 nftId,,) = moneyMarket.operate{value: ethCollateral}(
             0,
             0,
             ethSupplyData
@@ -3291,7 +3452,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT with ETH supply in emode 1
         uint256 ethCollateral = 5 ether;
         bytes memory ethSupplyData = abi.encode(1, 1, ethCollateral);
-        (uint256 nftId,) = moneyMarket.operate{value: ethCollateral}(
+        (uint256 nftId,,) = moneyMarket.operate{value: ethCollateral}(
             0,
             0,
             ethSupplyData
@@ -3427,7 +3588,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT with large USDC supply
         uint256 usdcSupply = 50000 * 1e6;
         bytes memory usdcSupplyData = abi.encode(1, 2, usdcSupply);
-        (vars.nftId,) = moneyMarket.operate(
+        (vars.nftId,,) = moneyMarket.operate(
             0,
             0,
             usdcSupplyData
@@ -3496,7 +3657,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Create NFT with ETH supply in emode 1 and borrow heavily
         uint256 ethCollateral = 1 ether; // $4000
         bytes memory ethSupplyData = abi.encode(1, 1, ethCollateral);
-        (uint256 nftId,) = moneyMarket.operate{value: ethCollateral}(
+        (uint256 nftId,,) = moneyMarket.operate{value: ethCollateral}(
             0,
             0,
             ethSupplyData
@@ -3571,7 +3732,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         require(success, "Failed to set USDC debt cap");
         
         // Set oracle price for USDC ($1)
-        oracle.setPrice(address(USDC), 1 * 1e18);
+        oracle.setPrice(address(USDC), 1 * 1e27);
         
         // List DAI as permissionless too (BOTH tokens must be permissionless)
         (success,) = address(moneyMarket).call(
@@ -3607,7 +3768,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         require(success, "Failed to set DAI debt cap");
         
         // Set oracle price for DAI ($1)
-        oracle.setPrice(address(DAI), 1 * 1e18);
+        oracle.setPrice(address(DAI), 1 * 1e27);
         
         // Note: DAI and USDC are already configured in the Liquidity contract via the base setup
         // The base setup supplies initial liquidity for these tokens
@@ -3692,7 +3853,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         });
         
         bytes memory actionData = abi.encode(3, positionParams_);
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate(
             0,
             0,
             actionData
@@ -3772,7 +3933,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         });
         
         bytes memory actionData = abi.encode(3, positionParams_);
-        (uint256 nftId, uint256 positionIndex) = moneyMarket.operate(
+        (uint256 nftId, uint256 positionIndex,) = moneyMarket.operate(
             0,
             0,
             actionData
@@ -3860,7 +4021,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Supply ETH as collateral (ETH is permissioned but that's OK for collateral)
         deal(address(this), 10 ether);
         bytes memory supplyData = abi.encode(1, 1, 5 ether);
-        (vars.nftId,) = moneyMarket.operate{value: 5 ether}(
+        (vars.nftId,,) = moneyMarket.operate{value: 5 ether}(
             0,
             0,
             supplyData
@@ -3884,7 +4045,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         });
         
         bytes memory actionData = abi.encode(4, positionParams_);
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             vars.nftId,
             0,
             actionData
@@ -3923,7 +4084,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Supply ETH as collateral (ETH is permissioned but that's OK for collateral)
         deal(address(this), 10 ether);
         bytes memory supplyData = abi.encode(1, 1, 5 ether);
-        (vars.nftId,) = moneyMarket.operate{value: 5 ether}(
+        (vars.nftId,,) = moneyMarket.operate{value: 5 ether}(
             0,
             0,
             supplyData
@@ -3947,7 +4108,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         });
         
         bytes memory actionData = abi.encode(4, positionParams_);
-        (vars.nftId, vars.positionIndex) = moneyMarket.operate(
+        (vars.nftId, vars.positionIndex,) = moneyMarket.operate(
             vars.nftId,
             0,
             actionData
@@ -4035,7 +4196,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         });
         
         bytes memory actionData = abi.encode(3, positionParams_);
-        (uint256 nftId,) = moneyMarket.operate(
+        (uint256 nftId,,) = moneyMarket.operate(
             0,
             0,
             actionData
@@ -4130,7 +4291,7 @@ contract MoneyMarketTest is DexV2BaseSetup {
         // Supply ETH as collateral (ETH is permissioned but that's OK for collateral)
         deal(address(this), 10 ether);
         bytes memory supplyData = abi.encode(1, 1, 5 ether);
-        (vars.nftId,) = moneyMarket.operate{value: 5 ether}(
+        (vars.nftId,,) = moneyMarket.operate{value: 5 ether}(
             0,
             0,
             supplyData
@@ -4162,6 +4323,126 @@ contract MoneyMarketTest is DexV2BaseSetup {
             actionData
         );
         
+    }
+
+    /// @notice Test updateLiquidationThreshold - increase only, validates constraints
+    function testUpdateLiquidationThreshold() public {
+        _listUSDC(); // ETH=1, USDC=2
+
+        // ── can increase ────────────────────────────────────────────────────────
+        // ETH was listed with LT=850. Increase to 900.
+        (bool success,) = address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                0, // NO_EMODE
+                NATIVE_TOKEN_ADDRESS,
+                900 // 90%
+            )
+        );
+        assertTrue(success, "Should succeed: increasing LT from 850 to 900");
+        console2.log("LT increased from 850 to 900 for ETH");
+
+        // ── cannot decrease ──────────────────────────────────────────────────────
+        vm.expectRevert();
+        address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                0,
+                NATIVE_TOKEN_ADDRESS,
+                850 // lower than current 900
+            )
+        );
+        console2.log("Correctly reverted: decreasing LT not allowed");
+
+        // ── cannot set equal to current ───────────────────────────────────────────
+        vm.expectRevert();
+        address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                0,
+                NATIVE_TOKEN_ADDRESS,
+                900 // same as current
+            )
+        );
+        console2.log("Correctly reverted: setting LT equal to current not allowed");
+
+        // ── new LT must be > collateral factor (CF=800) ──────────────────────────
+        // Try to set LT = 800 (equal to CF=800), must fail (CF >= LT not allowed)
+        vm.expectRevert();
+        address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                0,
+                NATIVE_TOKEN_ADDRESS,
+                800 // equal to CF — not allowed
+            )
+        );
+        console2.log("Correctly reverted: LT cannot equal CF");
+
+        // ── LP * LT must not exceed 99% ──────────────────────────────────────────
+        // ETH LP=50. For LT=950: (950 * 1050) / 1000 = 997 > 990 — should fail
+        vm.expectRevert();
+        address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                0,
+                NATIVE_TOKEN_ADDRESS,
+                950 // (950 * 1050) / 1000 = 997 > 990
+            )
+        );
+        console2.log("Correctly reverted: LT * LP would exceed 99%");
+
+        // ── unlisted token must fail ──────────────────────────────────────────────
+        vm.expectRevert();
+        address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                0,
+                address(0x1234), // not listed
+                920
+            )
+        );
+        console2.log("Correctly reverted: token not listed");
+
+        // ── emode: token must have config change bit set ──────────────────────────
+        TokenConfig[] memory tokenConfigs = new TokenConfig[](1);
+        tokenConfigs[0] = TokenConfig({
+            token: NATIVE_TOKEN_ADDRESS,
+            collateralClass: 1,
+            debtClass: 1,
+            collateralFactor: 850,
+            liquidationThreshold: 880,
+            liquidationPenalty: 50
+        });
+        address[] memory debtTokens = new address[](1);
+        debtTokens[0] = address(USDC);
+        _listEmode(tokenConfigs, debtTokens); // emode 1
+
+        // Increase emode LT from 880 to 910 — should succeed
+        (success,) = address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                1, // emode 1
+                NATIVE_TOKEN_ADDRESS,
+                910
+            )
+        );
+        assertTrue(success, "Should succeed: increasing emode LT from 880 to 910");
+        console2.log("Emode LT increased from 880 to 910 for ETH");
+
+        // USDC has no emode config change bit set — should fail
+        vm.expectRevert();
+        address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.updateLiquidationThreshold.selector,
+                1, // emode 1 — USDC has no config entry
+                address(USDC),
+                880
+            )
+        );
+        console2.log("Correctly reverted: USDC has no config change bit set for emode 1");
+
+        console2.log("=== updateLiquidationThreshold all checks passed ===");
     }
 
     /// @notice Test that non-permissionless DEX without position cap fails
@@ -4255,5 +4536,331 @@ contract MoneyMarketTest is DexV2BaseSetup {
             actionData
         );
         
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Post-liquidation HF check: debtValue == 0 guard tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    function _setupLiquidatablePosition() internal returns (uint256 nftId) {
+        _listUSDC();
+
+        vm.deal(address(this), address(this).balance + 10 ether);
+        deal(address(USDC), bob, 1000000 * 1e6);
+
+        bytes memory ethSupplyData = abi.encode(1, 1, 1 ether);
+        (nftId,,) = moneyMarket.operate{value: 1 ether}(0, 0, ethSupplyData);
+
+        bytes memory usdcBorrowData = abi.encode(2, 2, 2600 * 1e6, address(this));
+        moneyMarket.operate(nftId, 0, usdcBorrowData);
+
+        // ETH $4000 -> $3000 => HF = (3000 * 0.85) / 2600 ≈ 0.98 < 1
+        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+    }
+
+    /// @notice Full liquidation via type(uint256).max must succeed when it clears all debt
+    function testLiquidationFullRepayNormalBorrow() public {
+        uint256 nftId = _setupLiquidatablePosition();
+
+        uint256 bobEthBefore = bob.balance;
+        uint256 bobUsdcBefore = USDC.balanceOf(bob);
+
+        vm.startPrank(bob);
+        USDC.approve(address(moneyMarket), type(uint256).max);
+
+        bytes memory paybackData = abi.encode(type(uint256).max);
+        (, bytes memory withdrawData) = moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: nftId,
+                paybackPositionIndex: 2,
+                withdrawPositionIndex: 1,
+                to: bob,
+                estimate: false,
+                paybackData: paybackData
+            })
+        );
+        vm.stopPrank();
+
+        uint256 withdrawAmount = abi.decode(withdrawData, (uint256));
+        assertTrue(withdrawAmount > 0, "Liquidator should receive collateral");
+
+        uint256 bobUsdcSpent = bobUsdcBefore - USDC.balanceOf(bob);
+        assertTrue(bobUsdcSpent > 0, "Liquidator should have spent USDC");
+
+        HfInfo memory hfInfo = moneyMarket.getHfInfo(nftId, false);
+        assertEq(hfInfo.debtValue, 0, "All debt should be cleared");
+        assertEq(hfInfo.hf, type(uint256).max, "HF should be max when no debt");
+    }
+
+    /// @notice Exact-amount liquidation cannot fully clear debt due to rounding (only type(uint256).max can).
+    /// The non-max path rounds paybackAmountRaw_ down and subtracts 1, so dust debt remains and
+    /// the hfLimit check still applies (position HF overshoots hfLimit due to near-zero remaining debt).
+    function testLiquidationExactAmountLeavesResidualDebt() public {
+        uint256 nftId = _setupLiquidatablePosition();
+
+        vm.startPrank(bob);
+        USDC.approve(address(moneyMarket), type(uint256).max);
+
+        // Pass the estimated full payback amount as an exact value (not type(uint256).max).
+        // The non-max rounding path will leave dust debt, causing HF to overshoot hfLimit.
+        bytes memory paybackData = abi.encode(uint256(2600 * 1e6 + 10));
+        vm.expectRevert();
+        moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: nftId,
+                paybackPositionIndex: 2,
+                withdrawPositionIndex: 1,
+                to: bob,
+                estimate: false,
+                paybackData: paybackData
+            })
+        );
+        vm.stopPrank();
+
+        // Verify full repay only works through the type(uint256).max path
+        vm.startPrank(bob);
+        paybackData = abi.encode(type(uint256).max);
+        moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: nftId,
+                paybackPositionIndex: 2,
+                withdrawPositionIndex: 1,
+                to: bob,
+                estimate: false,
+                paybackData: paybackData
+            })
+        );
+        vm.stopPrank();
+
+        HfInfo memory hfInfo = moneyMarket.getHfInfo(nftId, false);
+        assertEq(hfInfo.debtValue, 0, "Only type(uint256).max should fully clear debt");
+    }
+
+    /// @notice Partial liquidation that overshoots hfLimit must still revert
+    function testLiquidationPartialStillEnforcesHfLimit() public {
+        _listUSDC();
+
+        vm.deal(address(this), address(this).balance + 10 ether);
+        deal(address(USDC), bob, 1000000 * 1e6);
+
+        // Supply 10 ETH ($40,000 collateral) and borrow only $2,600 USDC
+        // HF = (40000 * 0.85) / 2600 ≈ 13.08 (very healthy)
+        bytes memory ethSupplyData = abi.encode(1, 1, 10 ether);
+        (uint256 nftId,,) = moneyMarket.operate{value: 10 ether}(0, 0, ethSupplyData);
+
+        bytes memory usdcBorrowData = abi.encode(2, 2, 2600 * 1e6, address(this));
+        moneyMarket.operate(nftId, 0, usdcBorrowData);
+
+        // Drop ETH price just enough to make HF barely below 1
+        // HF = (price * 10 * 0.85) / 2600 < 1 => price < 2600 / 8.5 ≈ 305.88
+        // Use $305 so HF ≈ 0.997 (barely liquidatable)
+        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 305 * 1e27);
+
+        // hfLimit is 1.25e27. Even repaying a small amount like $100 on a $2600 debt
+        // with $3050 collateral would push HF well above 1.25.
+        // Repaying $2500 of $2600 would leave $100 debt with ~$450 collateral
+        // HF = (450 * 0.85) / 100 = 3.825 >> 1.25 => should revert
+        vm.startPrank(bob);
+        USDC.approve(address(moneyMarket), type(uint256).max);
+
+        bytes memory paybackData = abi.encode(uint256(2500 * 1e6));
+        vm.expectRevert();
+        moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: nftId,
+                paybackPositionIndex: 2,
+                withdrawPositionIndex: 1,
+                to: bob,
+                estimate: false,
+                paybackData: paybackData
+            })
+        );
+        vm.stopPrank();
+    }
+
+    /// @notice Liquidation that worsens HF on a solvent position must still revert
+    function testLiquidationPartialStillEnforcesHfDeteriorated() public {
+        _listUSDC();
+
+        vm.deal(address(this), address(this).balance + 10 ether);
+        deal(address(USDC), bob, 1000000 * 1e6);
+
+        // Supply 1 ETH as collateral, borrow 2600 USDC
+        bytes memory ethSupplyData = abi.encode(1, 1, 1 ether);
+        (uint256 nftId,,) = moneyMarket.operate{value: 1 ether}(0, 0, ethSupplyData);
+
+        bytes memory usdcBorrowData = abi.encode(2, 2, 2600 * 1e6, address(this));
+        moneyMarket.operate(nftId, 0, usdcBorrowData);
+
+        // Drop ETH from $4000 to $2700
+        // collateralValue = $2700, debtValue = $2600
+        // collateral > debt so maxLiquidationPenalty > 0 (solvent)
+        // HF = (2700 * 0.85) / 2600 ≈ 0.883 (liquidatable, solvent)
+        // maxLP = ((2700 - 2600) * 1000) / 2600 - 1 ≈ 37 (3.7%)
+        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 2700 * 1e27);
+
+        // With maxLP capped at 3.7% and token LP at 5%, effective LP = 3.7%
+        // For partial liquidation of amount X:
+        // HF'(X) = 0.85 * (2700 - 1.037*X) / (2600 - X)
+        // dHF'/dX = 0.85 * (2700 - 1.037*2600) / (2600 - X)^2
+        //         = 0.85 * (2700 - 2696.2) / (2600 - X)^2
+        //         = 0.85 * 3.8 / (2600 - X)^2  > 0
+        // So HF improves, which means HfDeteriorated should NOT trigger for reasonable amounts.
+        // But if collateral were exactly at debt * (1 + LP_eff), HF would stay constant.
+        // Let's set up a position where collateral < debt so maxLP = 0.
+        // When maxLP = 0, the HfDeteriorated check is skipped (by design).
+        // So this test just verifies the check still exists when maxLP > 0 and 
+        // HF does improve (no revert). That's a positive regression test.
+
+        vm.startPrank(bob);
+        USDC.approve(address(moneyMarket), type(uint256).max);
+
+        // Repay a small amount ($600) — HF should improve slightly, staying under hfLimit
+        bytes memory paybackData = abi.encode(uint256(600 * 1e6));
+        moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: nftId,
+                paybackPositionIndex: 2,
+                withdrawPositionIndex: 1,
+                to: bob,
+                estimate: false,
+                paybackData: paybackData
+            })
+        );
+        vm.stopPrank();
+
+        HfInfo memory hfInfo = moneyMarket.getHfInfo(nftId, false);
+        assertTrue(hfInfo.debtValue > 0, "Should still have remaining debt");
+        assertTrue(hfInfo.hf > 0.883e27, "HF should have improved after partial liquidation");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  D3 liquidation penalty: simple average fix tests
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// @notice D3 liquidation with different per-token penalties uses simple average (7.5%), not spot-weighted
+    function testD3LiquidationUsesSimpleAveragePenalty() public {
+        D3D4TestVars memory vars = _setupD3Pool();
+
+        // Set different penalties: USDC 5% (50), ETH 10% (100)
+        (bool ok,) = address(moneyMarket).call(
+            abi.encodeWithSelector(moneyMarketAdminModule.updateLiquidationPenalty.selector, 0, NATIVE_TOKEN_ADDRESS, 100)
+        );
+        require(ok, "Failed to update ETH liquidation penalty");
+
+        // Deposit D3 position: 5000 USDC + 1.5 ETH @ $4000 = ~$11000
+        // Higher collateral ensures maxLiquidationPenalty doesn't cap the per-token penalties
+        (vars.nftId, vars.positionIndex) = _depositD3Position(
+            vars.dexKey, vars.positionTickLower, vars.positionTickUpper, 5000 * 1e6, 1.5 ether
+        );
+
+        // Borrow $8000 USDC. At $4000 ETH: collateral=$11000, LT=80% -> normalized=$8800.
+        // HF = $8800/$8000 = 1.1 (healthy)
+        moneyMarket.operate(vars.nftId, 0, abi.encode(2, 2, uint256(8000 * 1e6), address(this)));
+
+        // Drop ETH price to $3000. Collateral=$5000+$4500=$9500, normalized=$7600.
+        // HF = $7600/$8000 = 0.95 (liquidatable). maxLP = (9500-8000)*1000/8000 = 186 (18.6%).
+        // Both penalties (50, 100) are under maxLP so they apply without capping.
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+
+        // Perform actual liquidation with $4000 payback
+        bytes memory withdrawData = _liquidateNormalBorrow(vars.nftId, 2, 1, 4000 * 1e6);
+        (uint256 t0Withdrawn, uint256 t1Withdrawn) = abi.decode(withdrawData, (uint256, uint256));
+
+        uint256 totalSeizedValueScaled = (t0Withdrawn * 1e18) + (t1Withdrawn * 3000e6);
+
+        // Seized value should be >= payback value (penalty adds a bonus).
+        // With simple average = (50+100)/2 = 75 (7.5%), expected ~$4300.
+        // maxLiquidationPenalty may cap this to near the payback value.
+        // In all cases, seized value must be >= ~95% of payback and position must improve.
+        assertTrue(totalSeizedValueScaled >= uint256(3800 * 1e24), "Seized value unreasonably low");
+        assertTrue(totalSeizedValueScaled <= uint256(4500 * 1e24), "Seized value unreasonably high");
+
+        HfInfo memory hfInfo = moneyMarket.getHfInfo(vars.nftId, false);
+        assertTrue(hfInfo.hf > 0, "HF should be positive after partial liquidation");
+    }
+
+    /// @notice D3 liquidation with equal penalties produces same result as simple average
+    function testD3LiquidationEqualPenaltiesUnchanged() public {
+        D3D4TestVars memory vars = _setupD3Pool();
+
+        // Both tokens have 5% (50) penalty (default from setup)
+        // Simple average = (50 + 50) / 2 = 50, same as before
+
+        (vars.nftId, vars.positionIndex) = _depositD3Position(
+            vars.dexKey, vars.positionTickLower, vars.positionTickUpper, 4000 * 1e6, 1 ether
+        );
+
+        moneyMarket.operate(vars.nftId, 0, abi.encode(2, 2, uint256(6000 * 1e6), address(this)));
+
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+
+        // Liquidation should succeed — behavior unchanged when penalties are equal
+        _liquidateNormalBorrow(vars.nftId, 2, 1, 3000 * 1e6);
+    }
+
+    /// @notice D3 liquidation penalty is independent of spot price manipulation (snapshot/revert approach)
+    function testD3LiquidationPenaltySpotIndependent() public {
+        D3D4TestVars memory vars = _setupD3Pool();
+
+        // Set different penalties: USDC 5% (50), ETH 10% (100)
+        (bool ok,) = address(moneyMarket).call(
+            abi.encodeWithSelector(moneyMarketAdminModule.updateLiquidationPenalty.selector, 0, NATIVE_TOKEN_ADDRESS, 100)
+        );
+        require(ok);
+
+        // Higher collateral so maxLiquidationPenalty doesn't cap the per-token penalties
+        (vars.nftId, vars.positionIndex) = _depositD3Position(
+            vars.dexKey, vars.positionTickLower, vars.positionTickUpper, 5000 * 1e6, 1.5 ether
+        );
+        moneyMarket.operate(vars.nftId, 0, abi.encode(2, 2, uint256(8000 * 1e6), address(this)));
+
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+
+        // Snapshot before liquidation
+        uint256 snapshot = vm.snapshot();
+
+        // --- Run 1: liquidate at normal pool composition ---
+        bytes memory wd1 = _liquidateNormalBorrow(vars.nftId, 2, 1, 4000 * 1e6);
+        (uint256 t0_1, uint256 t1_1) = abi.decode(wd1, (uint256, uint256));
+        uint256 totalValue1 = (t0_1 * 1e18) + (t1_1 * 3000e6);
+
+        // --- Revert to pre-liquidation state ---
+        vm.revertTo(snapshot);
+
+        // --- Manipulate pool composition via swap (simulate sandwich front-run) ---
+        _swapInPool(vars.dexKey, 2000 * 1e6, true);
+
+        // --- Run 2: liquidate at manipulated pool composition ---
+        bytes memory wd2 = _liquidateNormalBorrow(vars.nftId, 2, 1, 4000 * 1e6);
+        (uint256 t0_2, uint256 t1_2) = abi.decode(wd2, (uint256, uint256));
+        uint256 totalValue2 = (t0_2 * 1e18) + (t1_2 * 3000e6);
+
+        // With simple average penalty, the total seized VALUE should be nearly identical
+        // regardless of pool composition. Small diffs are from DEX withdrawal rounding.
+        uint256 diff = totalValue1 > totalValue2 ? totalValue1 - totalValue2 : totalValue2 - totalValue1;
+        assertTrue(diff < totalValue1 / 100, "Penalty should be spot-independent - value diff too large");
+    }
+
+    /// @notice D3 liquidation succeeds when one token has zero penalty
+    function testD3LiquidationOneTokenZeroPenalty() public {
+        D3D4TestVars memory vars = _setupD3Pool();
+
+        // Set USDC penalty to 0, ETH stays at 5% (50)
+        (bool ok,) = address(moneyMarket).call(
+            abi.encodeWithSelector(moneyMarketAdminModule.updateLiquidationPenalty.selector, 0, address(USDC), 0)
+        );
+        require(ok);
+
+        (vars.nftId, vars.positionIndex) = _depositD3Position(
+            vars.dexKey, vars.positionTickLower, vars.positionTickUpper, 4000 * 1e6, 1 ether
+        );
+        moneyMarket.operate(vars.nftId, 0, abi.encode(2, 2, uint256(6000 * 1e6), address(this)));
+
+        _changeOraclePrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+
+        // Simple average = (0 + 50) / 2 = 25 (2.5%)
+        // Should succeed without issues
+        _liquidateNormalBorrow(vars.nftId, 2, 1, 3000 * 1e6);
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.8.21 <=0.8.29;
+pragma solidity >=0.8.21 <=0.8.34;
 
 import {IDSA, IInstaIndex} from "./interfaces.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";

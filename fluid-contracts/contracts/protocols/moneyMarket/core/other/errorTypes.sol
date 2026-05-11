@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./structs.sol";
 
@@ -42,6 +42,9 @@ library ErrorTypes {
 
     /// @notice thrown when health factor limit exceeded after liquidation
     uint256 internal constant LiquidateModule__HfLimitExceeded = 301004;
+
+    /// @notice thrown when health factor deteriorated after liquidation
+    uint256 internal constant LiquidateModule__HfDeteriorated = 301005;
 
     /***********************************|
     |         Base Module Errors        | 

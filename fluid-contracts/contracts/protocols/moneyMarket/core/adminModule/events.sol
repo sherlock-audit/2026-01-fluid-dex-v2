@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./structs.sol";
 
@@ -22,8 +22,8 @@ event OracleUpdated(address indexed oldOracle, address indexed newOracle);
 event MaxPositionsPerNFTUpdated(uint256 indexed oldMaxPositions, uint256 indexed newMaxPositions);
 
 /// @notice Emitted when min normalized collateral value is updated
-/// @param oldMinNormalizedCollateralValue The previous min normalized collateral value (in 18 decimals)
-/// @param newMinNormalizedCollateralValue The new min normalized collateral value (in 18 decimals)
+/// @param oldMinNormalizedCollateralValue The previous min normalized collateral value (in 27 decimals)
+/// @param newMinNormalizedCollateralValue The new min normalized collateral value (in 27 decimals)
 event MinNormalizedCollateralValueUpdated(uint256 indexed oldMinNormalizedCollateralValue, uint256 indexed newMinNormalizedCollateralValue);
 
 /// @notice Emitted when HF limit for liquidation is updated
@@ -123,6 +123,20 @@ event CollateralFactorUpdated(
     uint256 indexed tokenIndex,
     uint256 oldCollateralFactor,
     uint256 newCollateralFactor
+);
+
+/// @notice Emitted when liquidation threshold is updated for a token
+/// @param emode The emode (0 for NO_EMODE)
+/// @param token The token address
+/// @param tokenIndex The token index
+/// @param oldLiquidationThreshold The old liquidation threshold
+/// @param newLiquidationThreshold The new liquidation threshold
+event LiquidationThresholdUpdated(
+    uint256 indexed emode,
+    address indexed token,
+    uint256 indexed tokenIndex,
+    uint256 oldLiquidationThreshold,
+    uint256 newLiquidationThreshold
 );
 
 /// @notice Emitted when liquidation penalty is updated for a token

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./erc721.sol";
 
@@ -21,13 +21,9 @@ abstract contract CallbackHandlers is ERC721 {
         if (moneyMarketIdentifier_ != MONEY_MARKET_IDENTIFIER) revert FluidMoneyMarketError(ErrorTypes.Base__ValidationFailed);
         if (!(
             actionIdentifier_ == CREATE_NORMAL_SUPPLY_POSITION_ACTION_IDENTIFIER || 
-            actionIdentifier_ == CREATE_NORMAL_BORROW_POSITION_ACTION_IDENTIFIER || 
             actionIdentifier_ == NORMAL_SUPPLY_ACTION_IDENTIFIER || 
-            actionIdentifier_ == NORMAL_BORROW_ACTION_IDENTIFIER || 
-            actionIdentifier_ == NORMAL_WITHDRAW_ACTION_IDENTIFIER ||
             actionIdentifier_ == NORMAL_PAYBACK_ACTION_IDENTIFIER ||
-            actionIdentifier_ == LIQUIDATE_NORMAL_PAYBACK_ACTION_IDENTIFIER ||
-            actionIdentifier_ == LIQUIDATE_NORMAL_WITHDRAW_ACTION_IDENTIFIER)
+            actionIdentifier_ == LIQUIDATE_NORMAL_PAYBACK_ACTION_IDENTIFIER)
         ) revert FluidMoneyMarketError(ErrorTypes.Base__ValidationFailed);
 
         SafeTransfer.safeTransferFrom(token_, _msgSender, address(LIQUIDITY), amount_);
@@ -202,16 +198,16 @@ contract FluidMoneyMarket is CallbackHandlers {
     /// @dev Can handle both creating new positions and modifying existing ones.
     ///      Supports multiple position types: Normal Supply, Normal Borrow, D3 (smart collateral), and D4 (smart debt).
     ///      The function validates health factor after operations that could affect position safety.
-    /// @param nftId_ The NFT ID representing the position to operate on. Use type(uint256).max to create a new NFT.
-    /// @param positionIndex_ The index of the position within the NFT to modify. Use type(uint256).max to create a new position.
+    /// @param nftId_ The NFT ID representing the position to operate on. Use 0 to create a new NFT.
+    /// @param positionIndex_ The index of the position within the NFT to modify. Use 0 to create a new position.
     /// @param actionData_ Encoded action data specifying the operation type and parameters (supply/borrow/withdraw/payback amounts, tokens, etc.)
-    /// @return Returns a tuple of (nftId, positionIndex) - the NFT ID and position index after the operation
+    /// @return Returns a tuple of (nftId, positionIndex, actualActionData) - the NFT ID, position index, and resolved action data with actual amounts
     function operate(
         uint256 nftId_, 
         uint256 positionIndex_, 
         bytes calldata actionData_
-    ) _handleMsgDetails external payable returns (uint256, uint256) {
-        return abi.decode(_spell(OPERATE_MODULE_IMPLEMENTATION, msg.data), (uint256, uint256));
+    ) _handleMsgDetails external payable returns (uint256, uint256, bytes memory) {
+        return abi.decode(_spell(OPERATE_MODULE_IMPLEMENTATION, msg.data), (uint256, uint256, bytes));
     }
 
     /// @notice Liquidates an unhealthy position by paying back debt and seizing collateral

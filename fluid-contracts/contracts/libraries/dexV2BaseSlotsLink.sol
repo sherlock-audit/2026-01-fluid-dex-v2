@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 /// @notice library that helps in reading / working with storage slot data of Fluid Dex V2 Base.
 library DexV2BaseSlotsLink {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "../other/commonImport.sol";
 import { PendingTransfers as PT } from "../../../../../libraries/pendingTransfers.sol";
@@ -151,12 +151,12 @@ contract FluidDexV2D4UserModule is CommonImportD4Other {
             }
 
             // Update Pending Transfers for token 0
-            PT.addPendingBorrow(msg.sender, params_.dexKey.token0, int256(v_.amount0)); // When user adds liquidity, he/she is borrowing tokens from the protocol, hence a positive pending borrow 
-            PT.addPendingSupply(msg.sender, params_.dexKey.token0, -int256(v_.feeAccruedToken0)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve.
+            PT.addPendingBorrow(msg.sender, params_.dexKey.token0, SafeCast.toInt256(v_.amount0)); // When user adds liquidity, he/she is borrowing tokens from the protocol, hence a positive pending borrow 
+            PT.addPendingSupply(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(v_.feeAccruedToken0)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve.
 
             // Update Pending Transfers for token 1
-            PT.addPendingBorrow(msg.sender, params_.dexKey.token1, int256(v_.amount1)); // When user adds liquidity, he/she is borrowing tokens from the protocol, hence a positive pending borrow 
-            PT.addPendingSupply(msg.sender, params_.dexKey.token1, -int256(v_.feeAccruedToken1)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve.
+            PT.addPendingBorrow(msg.sender, params_.dexKey.token1, SafeCast.toInt256(v_.amount1)); // When user adds liquidity, he/she is borrowing tokens from the protocol, hence a positive pending borrow 
+            PT.addPendingSupply(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(v_.feeAccruedToken1)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve.
 
             emit LogBorrow(
                 dexType_, 
@@ -300,12 +300,12 @@ contract FluidDexV2D4UserModule is CommonImportD4Other {
         }
 
         // Update Pending Transfers for token 0
-        PT.addPendingBorrow(msg.sender, params_.dexKey.token0, -int256(v_.amount0)); // When user removes liquidity, he/she is paying back tokens to the protocol, hence a negative pending borrow 
-        PT.addPendingSupply(msg.sender, params_.dexKey.token0, -int256(v_.feeAccruedToken0)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve
+        PT.addPendingBorrow(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(v_.amount0)); // When user removes liquidity, he/she is paying back tokens to the protocol, hence a negative pending borrow 
+        PT.addPendingSupply(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(v_.feeAccruedToken0)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve
 
         // Update Pending Transfers for token 1
-        PT.addPendingBorrow(msg.sender, params_.dexKey.token1, -int256(v_.amount1)); // When user removes liquidity, he/she is paying back tokens to the protocol, hence a negative pending borrow 
-        PT.addPendingSupply(msg.sender, params_.dexKey.token1, -int256(v_.feeAccruedToken1)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve
+        PT.addPendingBorrow(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(v_.amount1)); // When user removes liquidity, he/she is paying back tokens to the protocol, hence a negative pending borrow 
+        PT.addPendingSupply(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(v_.feeAccruedToken1)); // when fee was accrued during swap we made it +ve supply, hence now we make it -ve
 
         emit LogPayback(
             dexType_, 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 library PoolLock {
     // bytes32(uint256(keccak256("FLUID_DEX_V2_REENTRANCY_LOCK")) - 1)

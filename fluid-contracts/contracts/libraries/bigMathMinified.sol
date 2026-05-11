@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity >=0.8.21 <=0.8.29;
+pragma solidity >=0.8.21 <=0.8.34;
 
 /// @title library that represents a number in BigNumber(coefficient and exponent) format to store in smaller bits.
 /// @notice the number is divided into two parts: a coefficient and an exponent. This comes at a cost of losing some precision

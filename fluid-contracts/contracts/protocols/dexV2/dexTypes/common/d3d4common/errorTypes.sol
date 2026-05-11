@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./events.sol";
 
@@ -86,6 +86,9 @@ library ErrorTypes {
 
     /// @notice thrown when sqrt price deviation due to rounding exceeds 0.01%
     uint256 internal constant SwapModule__SqrtPriceDeviationTooHigh = 211011;
+
+    /// @notice thrown when controllerData exceeds maximum allowed length
+    uint256 internal constant SwapModule__ControllerDataTooLarge = 211012;
 
     /***********************************|
     |         Helper Errors             | 

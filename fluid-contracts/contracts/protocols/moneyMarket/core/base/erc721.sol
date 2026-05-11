@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./helpers.sol";
 
@@ -53,6 +53,7 @@ abstract contract ERC721 is Helpers {
 
     /// @notice approves an NFT with `nftId_` to be spent (transferred) by `spender_`
     function approve(address spender_, uint256 nftId_) public {
+        if (_msgSender != address(0)) revert FluidMoneyMarketError(ErrorTypes.ERC721__InvalidOperation);
         address owner_ = address(uint160(_nftConfigs[nftId_]));
         if (!(msg.sender == owner_ || _nftApprovedForAll[owner_][msg.sender]))
             revert FluidMoneyMarketError(ErrorTypes.ERC721__Unauthorized);
@@ -64,6 +65,7 @@ abstract contract ERC721 is Helpers {
 
     /// @notice approves all NFTs owned by msg.sender to be spent (transferred) by `operator_`
     function setApprovalForAll(address operator_, bool approved_) public {
+        if (_msgSender != address(0)) revert FluidMoneyMarketError(ErrorTypes.ERC721__InvalidOperation);
         _nftApprovedForAll[msg.sender][operator_] = approved_;
 
         emit ApprovalForAll(msg.sender, operator_, approved_);
@@ -71,13 +73,13 @@ abstract contract ERC721 is Helpers {
 
     /// @notice transfers an NFT with `nftId_` `from_` address `to_` address without safe check
     function transferFrom(address from_, address to_, uint256 nftId_) public {
+        if (_msgSender != address(0)) revert FluidMoneyMarketError(ErrorTypes.ERC721__InvalidOperation);
         uint256 nftConfig_ = _nftConfigs[nftId_];
         if (from_ != address(uint160(nftConfig_))) revert FluidMoneyMarketError(ErrorTypes.ERC721__InvalidParams);
 
         if (!(msg.sender == from_ || _nftApprovedForAll[from_][msg.sender] || msg.sender == _nftApproved[nftId_]))
             revert FluidMoneyMarketError(ErrorTypes.ERC721__Unauthorized);
 
-        // call _transfer with vaultId extracted from tokenConfig_
         _transfer(from_, to_, nftId_, (nftConfig_ >> MSL.BITS_NFT_CONFIGS_EMODE)); // Removed First 192 bits from nftConfig_ which are NFT owner and NFT index
 
         delete _nftApproved[nftId_];
@@ -140,7 +142,7 @@ abstract contract ERC721 is Helpers {
             interfaceId_ == 0x01ffc9a7 || // ERC165 Interface ID for ERC165
             interfaceId_ == 0x80ac58cd || // ERC165 Interface ID for ERC721
             interfaceId_ == 0x5b5e139f || // ERC165 Interface ID for ERC721Metadata
-            interfaceId_ == 0x780e9d63; // ERC165 Interface ID for ERC721Enumberable
+            interfaceId_ == 0x780e9d63; // ERC165 Interface ID for ERC721Enumerable
     }
 
     /*//////////////////////////////////////////////////////////////

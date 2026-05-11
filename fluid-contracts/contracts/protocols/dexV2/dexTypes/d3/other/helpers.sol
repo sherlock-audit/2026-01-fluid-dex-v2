@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./variables.sol";
 import { LiquiditySlotsLink as LSL } from "../../../../../libraries/liquiditySlotsLink.sol";
@@ -28,13 +28,21 @@ abstract contract Helpers is Variables {
 
         (calculatedVars_.token1NumeratorPrecision, calculatedVars_.token1DenominatorPrecision) = 
             _calculateNumeratorAndDenominatorPrecisions(temp_);
-            
-        (calculatedVars_.token0SupplyExchangePrice, ) = LC.calcExchangePrices(LIQUIDITY.readFromStorage(
-            LSL.calculateMappingStorageSlot(LSL.LIQUIDITY_EXCHANGE_PRICES_MAPPING_SLOT, token0_)));
-        if (calculatedVars_.token0SupplyExchangePrice == 0) calculatedVars_.token0SupplyExchangePrice = LC.EXCHANGE_PRICES_PRECISION;
 
-        (calculatedVars_.token1SupplyExchangePrice, ) = LC.calcExchangePrices(LIQUIDITY.readFromStorage(
-            LSL.calculateMappingStorageSlot(LSL.LIQUIDITY_EXCHANGE_PRICES_MAPPING_SLOT, token1_)));
-        if (calculatedVars_.token1SupplyExchangePrice == 0) calculatedVars_.token1SupplyExchangePrice = LC.EXCHANGE_PRICES_PRECISION;
+        // temp_ => token 0 exchange price storage slot data
+        temp_ = LIQUIDITY.readFromStorage(LSL.calculateMappingStorageSlot(LSL.LIQUIDITY_EXCHANGE_PRICES_MAPPING_SLOT, token0_));
+        if (temp_ == 0) {
+            calculatedVars_.token0SupplyExchangePrice = LC.EXCHANGE_PRICES_PRECISION;
+        } else {
+            (calculatedVars_.token0SupplyExchangePrice, ) = LC.calcExchangePrices(temp_);
+        }
+
+        // temp_ => token 1 exchange price storage slot data
+        temp_ = LIQUIDITY.readFromStorage(LSL.calculateMappingStorageSlot(LSL.LIQUIDITY_EXCHANGE_PRICES_MAPPING_SLOT, token1_));
+        if (temp_ == 0) {
+            calculatedVars_.token1SupplyExchangePrice = LC.EXCHANGE_PRICES_PRECISION;
+        } else {
+            (calculatedVars_.token1SupplyExchangePrice, ) = LC.calcExchangePrices(temp_);
+        }
     }
 }

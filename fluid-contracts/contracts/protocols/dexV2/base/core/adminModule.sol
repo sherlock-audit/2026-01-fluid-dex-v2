@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import { IERC20 } from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./helpers.sol";
@@ -127,6 +127,11 @@ abstract contract DexV2AdminModule is Helpers {
         if (token_ != NATIVE_TOKEN && msg.value > 0) {
             revert FluidDexV2Error(ErrorTypes.DexV2AdminModule__MsgValueForNonNativeToken);
         }
+
+        // verify token is a contract (has bytecode) to prevent SafeTransfer succeeding on EOAs
+        if (token_ != NATIVE_TOKEN && token_.code.length == 0) {
+            revert FluidDexV2Error(ErrorTypes.DexV2AdminModule__TokenNotAContract);
+        }
         
         if (amount_ > 0) {
             if (token_ == NATIVE_TOKEN) {
@@ -153,6 +158,8 @@ abstract contract DexV2AdminModule is Helpers {
     /// @notice Rebalances a token's supply/borrow positions with the Liquidity layer
     /// @dev Syncs unaccounted borrow amounts and contract balance with Liquidity layer.
     ///      Called periodically to maintain accurate accounting between DexV2 and Liquidity.
+    ///      Uses SKIP_TRANSFERS when supply == borrow, NET_TRANSFERS when both have the same sign,
+    ///      and gross transfers otherwise, so Liquidity never demands more tokens than the contract holds.
     /// @param token_ The token address to rebalance
     function rebalance(address token_) external onlyAuths {
         uint256 totalAuthAddedAmount_ = _totalAuthAddedAmount[BASE_SLOT][token_];
@@ -160,23 +167,88 @@ abstract contract DexV2AdminModule is Helpers {
 
         uint256 tokenBalance_ = token_ == NATIVE_TOKEN ? address(this).balance : IERC20(token_).balanceOf(address(this));
 
-        int256 supplyAmount_ = int256(tokenBalance_) + unaccountedBorrowAmount_ - int256(totalAuthAddedAmount_);
+        int256 supplyAmount_ = SafeCast.toInt256(tokenBalance_) + unaccountedBorrowAmount_ - SafeCast.toInt256(totalAuthAddedAmount_);
         int256 borrowAmount_ = unaccountedBorrowAmount_;
 
-        uint256 ethToSend_;
-        if (token_ == NATIVE_TOKEN) {
-            if (supplyAmount_ > 0) ethToSend_ += uint256(supplyAmount_);
-            if (borrowAmount_ < 0) ethToSend_ += uint256(-borrowAmount_);
+        if (supplyAmount_ == 0 && borrowAmount_ == 0) {
+            revert FluidDexV2Error(ErrorTypes.DexV2AdminModule__NothingToRebalance);
         }
-        LIQUIDITY.operate{value: ethToSend_}(
-            token_,
-            supplyAmount_,
-            borrowAmount_,
-            address(this),
-            address(this),
-            abi.encode(DEXV2_IDENTIFIER, REBALANCE_ACTION_IDENTIFIER)
-        );
-        
+
+        if (supplyAmount_ == borrowAmount_) {
+            // Both amounts cancel out -- skip all token transfers
+            LIQUIDITY.operate(
+                token_,
+                supplyAmount_,
+                borrowAmount_,
+                address(this),
+                address(this),
+                abi.encode(DEXV2_IDENTIFIER, REBALANCE_ACTION_IDENTIFIER, SKIP_TRANSFERS, address(this))
+            );
+        } else if ((supplyAmount_ > 0 && borrowAmount_ > 0) || (supplyAmount_ < 0 && borrowAmount_ < 0)) {
+            // Both same sign (deposit+borrow or withdraw+payback) -- use net transfers so
+            // Liquidity only requests the net amount, avoiding gross-transfer underfunding
+            address withdrawTo_;
+            address borrowTo_;
+            if (supplyAmount_ > 0) {
+                // deposit + borrow: Liquidity validation requires only borrowTo_ set
+                borrowTo_ = address(this);
+            } else {
+                // withdraw + payback: Liquidity validation requires only withdrawTo_ set
+                withdrawTo_ = address(this);
+            }
+            if (supplyAmount_ > borrowAmount_) {
+                // Net transfer IN: Liquidity pulls the net amount from DexV2
+                uint256 netAmountIn_;
+                unchecked {
+                    netAmountIn_ = uint256(supplyAmount_ - borrowAmount_);
+                }
+                if (token_ == NATIVE_TOKEN) {
+                    LIQUIDITY.operate{value: netAmountIn_}(
+                        token_,
+                        supplyAmount_,
+                        borrowAmount_,
+                        withdrawTo_,
+                        borrowTo_,
+                        abi.encode(DEXV2_IDENTIFIER, REBALANCE_ACTION_IDENTIFIER, NET_TRANSFERS, address(this))
+                    );
+                } else {
+                    LIQUIDITY.operate(
+                        token_,
+                        supplyAmount_,
+                        borrowAmount_,
+                        withdrawTo_,
+                        borrowTo_,
+                        abi.encode(DEXV2_IDENTIFIER, REBALANCE_ACTION_IDENTIFIER, netAmountIn_, NET_TRANSFERS, address(this))
+                    );
+                }
+            } else {
+                // Net transfer OUT: Liquidity sends the net amount to DexV2
+                LIQUIDITY.operate(
+                    token_,
+                    supplyAmount_,
+                    borrowAmount_,
+                    withdrawTo_,
+                    borrowTo_,
+                    abi.encode(DEXV2_IDENTIFIER, REBALANCE_ACTION_IDENTIFIER, NET_TRANSFERS, address(this))
+                );
+            }
+        } else {
+            uint256 ethToSend_;
+            // Different signs or one is zero -- gross transfers work fine
+            if (token_ == NATIVE_TOKEN) {
+                if (supplyAmount_ > 0) ethToSend_ += uint256(supplyAmount_);
+                if (borrowAmount_ < 0) ethToSend_ += uint256(-borrowAmount_);
+            }
+            LIQUIDITY.operate{value: ethToSend_}(
+                token_,
+                supplyAmount_,
+                borrowAmount_,
+                address(this),
+                address(this),
+                abi.encode(DEXV2_IDENTIFIER, REBALANCE_ACTION_IDENTIFIER)
+            );
+        }
+
         delete _unaccountedBorrowAmount[BASE_SLOT][token_];
         
         emit LogRebalance(token_, supplyAmount_, borrowAmount_);

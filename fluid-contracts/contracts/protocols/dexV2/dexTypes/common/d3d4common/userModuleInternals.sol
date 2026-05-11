@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import { LiquidityCalcs as LC } from "../../../../../libraries/liquidityCalcs.sol";
 import { LiquidityAmounts as LA } from "lib/v3-periphery/contracts/libraries/LiquidityAmounts.sol";
@@ -14,8 +14,8 @@ abstract contract CommonUserModuleInternals is CommonControllerModuleInternals {
 
         v_.positionId = keccak256(abi.encode(msg.sender, params_.tickLower, params_.tickUpper, params_.positionSalt));
         if (!((params_.tickLower < params_.tickUpper) &&
-                (params_.tickUpper <= MAX_TICK) &&
-                (params_.tickLower >= MIN_TICK) &&
+                (params_.tickUpper < MAX_TICK) &&
+                (params_.tickLower > MIN_TICK) &&
                 (params_.tickLower % int24(params_.dexKey.tickSpacing) == 0) &&
                 (params_.tickUpper % int24(params_.dexKey.tickSpacing) == 0) &&
                 (params_.tickUpper - params_.tickLower <= int24(MAX_TICK_RANGE)))
@@ -218,8 +218,8 @@ abstract contract CommonUserModuleInternals is CommonControllerModuleInternals {
 
         v_.positionId = keccak256(abi.encode(msg.sender, params_.tickLower, params_.tickUpper, params_.positionSalt));
         if (!((params_.tickLower < params_.tickUpper) &&
-                (params_.tickUpper <= MAX_TICK) &&
-                (params_.tickLower >= MIN_TICK) &&
+                (params_.tickUpper < MAX_TICK) &&
+                (params_.tickLower > MIN_TICK) &&
                 (params_.tickLower % int24(params_.dexKey.tickSpacing) == 0) &&
                 (params_.tickUpper % int24(params_.dexKey.tickSpacing) == 0) &&
                 (params_.tickUpper - params_.tickLower <= int24(MAX_TICK_RANGE)))
@@ -413,7 +413,7 @@ abstract contract CommonUserModuleInternals is CommonControllerModuleInternals {
         v_.lpFee = _validateLPFee(params_.dexKey.fee);
 
         // We need to do the check here for sqrt price because the library we are using uses different min and max sqrt price than us
-        if (params_.sqrtPriceX96 > MAX_SQRT_PRICE_X96 || params_.sqrtPriceX96 < MIN_SQRT_PRICE_X96) {
+        if (params_.sqrtPriceX96 >= MAX_SQRT_PRICE_X96 || params_.sqrtPriceX96 <= MIN_SQRT_PRICE_X96) {
             revert FluidDexV2D3D4Error(ErrorTypes.UserModule__SqrtPriceOutOfBounds);
         }
         v_.tick = TM.getTickAtSqrtRatio(uint160(params_.sqrtPriceX96));

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity >=0.8.21 <=0.8.29;
+pragma solidity >=0.8.21 <=0.8.34;
 
 /// @title library that calculates number "tick" and "ratioX96" from this: ratioX96 = (1.0015^tick) * 2^96
 /// @notice this library is used in Fluid Vault protocol for optimiziation.

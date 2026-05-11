@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity ^0.8.34;
 
 import "forge-std/Test.sol";
 import "forge-std/console2.sol";
@@ -65,9 +65,15 @@ contract DexV2BaseTest is DexV2BaseSetup {
     }
 
     function testShouldFailIfPendingSupply() public {
-        vm.expectRevert(PendingTransfers.PendingTransfersNotCleared.selector);
+        // PendingTransfersNotCleared now has a bytes parameter, so we check the selector manually
         bytes memory data_ = abi.encodeWithSelector(this.shouldFailIfPendingSupplyCallbackImplementation.selector);
-        dexV2.startOperation(data_);
+        (bool success, bytes memory returnData) = address(dexV2).call(
+            abi.encodeWithSelector(dexV2.startOperation.selector, data_)
+        );
+        assertFalse(success, "Should have reverted");
+        // Verify it reverted with PendingTransfersNotCleared error
+        bytes4 errorSelector = bytes4(returnData);
+        assertEq(errorSelector, PendingTransfers.PendingTransfersNotCleared.selector, "Wrong error selector");
     }
 
     function shouldFailIfPendingWithdrawCallbackImplementation() public returns (bytes memory) {
@@ -86,9 +92,15 @@ contract DexV2BaseTest is DexV2BaseSetup {
     }
 
     function testShouldFailIfPendingWithdraw() public {
-        vm.expectRevert(PendingTransfers.PendingTransfersNotCleared.selector);
+        // PendingTransfersNotCleared now has a bytes parameter, so we check the selector manually
         bytes memory data_ = abi.encodeWithSelector(this.shouldFailIfPendingWithdrawCallbackImplementation.selector);
-        dexV2.startOperation(data_);
+        (bool success, bytes memory returnData) = address(dexV2).call(
+            abi.encodeWithSelector(dexV2.startOperation.selector, data_)
+        );
+        assertFalse(success, "Should have reverted");
+        // Verify it reverted with PendingTransfersNotCleared error
+        bytes4 errorSelector = bytes4(returnData);
+        assertEq(errorSelector, PendingTransfers.PendingTransfersNotCleared.selector, "Wrong error selector");
     }
 
     function shouldFailOnReentrancyCallbackImplementation() public returns (bytes memory) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./adminModule.sol";
 
@@ -25,7 +25,7 @@ contract FluidDexV2 is DexV2AdminModule {
         result_ = IDexV2Callbacks(msg.sender).startOperationCallback(data_);
 
         // Ensure all pending transfers are cleared before completing
-        PT.requireAllPendingTransfersCleared();
+        PT.requireAllPendingTransfersCleared(result_);
 
         // Deactivate the operation
         OC.deactivateOperation();
@@ -64,6 +64,10 @@ contract FluidDexV2 is DexV2AdminModule {
     /// @dev Only callable after startOperation. Handles supply, borrow, and stored amounts.
     ///      Use type(int128).max/min to clear entire pending supply/borrow.
     ///      Optimizes by skipping Liquidity layer when possible (if contract has sufficient balance).
+    ///      High-priority integration warning: if a Liquidity-layer failure stores a net-out payout, the stored
+    ///      balance is credited to `to_`. Contract recipients must expose a recovery path that calls
+    ///      `withdrawStoredTokens()` later, otherwise their stored payout can become blocked inside
+    ///      the recipient contract.
     /// @param token_ The token address to settle
     /// @param supplyAmount_ Net supply amount (positive = deposit, negative = withdraw)
     /// @param borrowAmount_ Net borrow amount (positive = borrow, negative = payback)
@@ -109,13 +113,24 @@ contract FluidDexV2 is DexV2AdminModule {
             to_ = msg.sender;
         }
 
-        // there should not be msg.value if the token is not the native token
-        if (token_ != NATIVE_TOKEN && msg.value > 0) {
-            revert FluidDexV2Error(ErrorTypes.DexV2Main__MsgValueForNonNativeToken);
+        if (token_ != NATIVE_TOKEN) {
+            // there should not be msg.value if the token is not the native token
+            if (msg.value > 0) revert FluidDexV2Error(ErrorTypes.DexV2Main__MsgValueForNonNativeToken);
+            // verify token is a contract (has bytecode) to prevent SafeTransfer succeeding on EOAs
+            if (token_.code.length == 0) revert FluidDexV2Error(ErrorTypes.DexV2Main__TokenNotAContract);
         }
 
         int256 netSupplyAmount_ = supplyAmount_ + storeAmount_; // amount is stored as supply on liquidity
         int256 netAmount_ = netSupplyAmount_ - borrowAmount_; // positive means user is paying tokens in net, negative means user is receiving tokens in net
+
+        if (
+            netSupplyAmount_ < type(int128).min ||
+            netSupplyAmount_ > type(int128).max ||
+            netAmount_ < type(int128).min ||
+            netAmount_ > type(int128).max
+        ) {
+            revert FluidDexV2Error(ErrorTypes.DexV2Main__OperateAmountOutOfBounds);
+        }
 
         // if protocol is paying tokens in net, then we need to update our accounting before paying the user
         // this is done to mitigate any risks of reentrancy attacks
@@ -123,7 +138,7 @@ contract FluidDexV2 is DexV2AdminModule {
 
         uint256 tokenBalance_ = token_ == NATIVE_TOKEN ? (address(this).balance - msg.value) : IERC20(token_).balanceOf(address(this));
 
-        if (netAmount_ > 0 && uint256(netAmount_) < tokenBalance_) {
+        if (netAmount_ > 0 && uint256(netAmount_) <= tokenBalance_) {
             // Net tokens coming in from user and they are less than the token balance hence we can skip liquidity layer interactions
             // We only skip the liquidity layer interactions if the amount coming in is not going to make the amount in the contract more than double of what it is right now
             // One can call settle in parts to bypass this condition but that will cause more gas as transfers will happen twice or more
@@ -145,7 +160,7 @@ contract FluidDexV2 is DexV2AdminModule {
 
             // Net amount > 0; net tokens coming in from the user, hence we do any storage updates after the money comes in
             if (borrowAmount_ != 0) _unaccountedBorrowAmount[BASE_SLOT][token_] += borrowAmount_;
-        } else if (netAmount_ < 0 && uint256(-netAmount_) < tokenBalance_) {
+        } else if (netAmount_ < 0 && uint256(-netAmount_) <= tokenBalance_) {
             // Net amount < 0; net tokens going out to the user, hence we do any storage updates before the money goes out
             if (borrowAmount_ != 0) _unaccountedBorrowAmount[BASE_SLOT][token_] += borrowAmount_;
 
@@ -199,6 +214,10 @@ contract FluidDexV2 is DexV2AdminModule {
                     // if (msg.value > 0) SafeTransfer.safeTransferNative(msg.sender, msg.value);
                 }
             }
+        } else {
+            // netAmount_ == 0, borrowAmount_ == 0, and netSupplyAmount_ == 0
+            // This means no token transfers are needed, hence we'll just refund if any eth was sent
+            if (msg.value > 0) SafeTransfer.safeTransferNative(msg.sender, msg.value);
         }
 
         // if protocol is receiving tokens in net, then we need to update our accounting after receiving tokens from the user
@@ -206,6 +225,49 @@ contract FluidDexV2 is DexV2AdminModule {
         if (netAmount_ > 0) _updateSettledAmountsOnStorage(token_, supplyAmount_, borrowAmount_, storeAmount_);
 
         emit LogSettle(msg.sender, token_, supplyAmount_, borrowAmount_, storeAmount_, to_);
+    }
+
+    /// @notice Withdraws stored token balance that was credited during a Liquidity-layer fallback.
+    /// @dev Stored balances are created when settle() cannot complete via the Liquidity layer and
+    ///      stores an IOU under the recipient's address. This function allows that recipient to
+    ///      claim the tokens directly. Tries local DEX balance first; if insufficient, withdraws
+    ///      from the Liquidity layer. Reverts if neither source can fulfill the withdrawal.
+    ///      Does NOT require startOperation — callable by any address with a stored balance.
+    ///      High-priority integration warning: contracts used as settlement recipients must implement a way to
+    ///      call this method and forward recovered tokens to the intended receiver.
+    /// @param token_ The token to withdraw
+    /// @param amount_ The amount to withdraw (must be <= stored balance)
+    /// @param to_ The address to receive the tokens (defaults to msg.sender if zero)
+    function withdrawStoredTokens(address token_, uint256 amount_, address to_) external _reentrancyLock {
+        if (amount_ == 0) revert FluidDexV2Error(ErrorTypes.DexV2Main__OperateAmountsZero);
+        if (to_ == address(0)) to_ = msg.sender;
+
+        uint256 stored_ = _userStoredTokenAmount[BASE_SLOT][msg.sender][token_];
+        if (amount_ > stored_) revert FluidDexV2Error(ErrorTypes.DexV2Main__InsufficientStoredTokenAmount);
+
+        unchecked {
+            _userStoredTokenAmount[BASE_SLOT][msg.sender][token_] = stored_ - amount_;
+        }
+
+        uint256 tokenBalance_ = token_ == NATIVE_TOKEN ? address(this).balance : IERC20(token_).balanceOf(address(this));
+
+        if (amount_ > tokenBalance_) {
+            // Withdraw from Liquidity layer directly to recipient.
+            // Reverts on failure (no silent re-store like settle() fallback).
+            LIQUIDITY.operate(
+                token_,
+                -SafeCast.toInt256(amount_),
+                0,
+                to_,
+                address(0),
+                abi.encode(DEXV2_IDENTIFIER, SETTLE_ACTION_IDENTIFIER)
+            );
+        } else {
+            if (token_ == NATIVE_TOKEN) SafeTransfer.safeTransferNative(to_, amount_);
+            else SafeTransfer.safeTransfer(token_, to_, amount_);
+        }
+
+        emit LogSettle(msg.sender, token_, 0, 0, -SafeCast.toInt256(amount_), to_);
     }
 
     /// @dev THE BELOW FUNCTIONS DONT HAVE _onlyAfterOperationStarted MODIFIER

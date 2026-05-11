@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity >=0.8.21 <=0.8.29;
+pragma solidity >=0.8.21 <=0.8.34;
 
 abstract contract Events {
     event LogBuyback(address indexed tokenIn, address indexed tokenOut, uint256 sellAmount, uint256 buyAmount);

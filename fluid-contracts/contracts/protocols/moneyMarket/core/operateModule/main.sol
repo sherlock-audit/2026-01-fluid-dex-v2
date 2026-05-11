@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./helpers.sol";
 
@@ -39,11 +39,13 @@ contract FluidMoneyMarketOperateModule is Helpers {
         uint256 nftId_, 
         uint256 positionIndex_, 
         bytes calldata actionData_
-    ) _onlyDelegateCall external payable returns (uint256, uint256) {
+    ) _onlyDelegateCall external payable returns (uint256, uint256, bytes memory) {
+        bytes memory actualActionData_;
+
         if (nftId_ == 0) {
             // This means that the user wants to create a new NFT
             nftId_ = IExternalCallForMint(address(this)).mint();
-            positionIndex_ = _createPosition(nftId_, _nftConfigs[nftId_], NO_EMODE, actionData_); // A new NFT starts with no emode, i.e. 0
+            (positionIndex_, actualActionData_) = _createPosition(nftId_, _nftConfigs[nftId_], NO_EMODE, actionData_); // A new NFT starts with no emode, i.e. 0
         } else {
             uint256 nftConfig_ = _nftConfigs[nftId_];
             if (address(uint160(nftConfig_)) != msg.sender) revert(); // Either the caller is not the owner of the NFT or this NFT doesn't exist
@@ -52,7 +54,7 @@ contract FluidMoneyMarketOperateModule is Helpers {
 
             if (positionIndex_ == 0) {
                 // This means that the user wants to create a new position in an exisiting NFT
-                positionIndex_ = _createPosition(nftId_, nftConfig_, emode_, actionData_);
+                (positionIndex_, actualActionData_) = _createPosition(nftId_, nftConfig_, emode_, actionData_);
             } else {
                 // This means the user wants to interact with an exisiting position
                 if (positionIndex_ > (nftConfig_ >> MSL.BITS_NFT_CONFIGS_NUMBER_OF_POSITIONS) & X10) revert();
@@ -60,12 +62,15 @@ contract FluidMoneyMarketOperateModule is Helpers {
                 uint256 positionData_ = _positionData[nftId_][positionIndex_];
                 uint256 positionType_ = (positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE) & X5;
 
-                if (positionType_ == NORMAL_SUPPLY_POSITION_TYPE) _processNormalSupplyAction(nftId_, nftConfig_, positionIndex_, positionData_, emode_, actionData_);
-                else if (positionType_ == NORMAL_BORROW_POSITION_TYPE) _processNormalBorrowAction(nftId_, nftConfig_, positionIndex_, positionData_, emode_, actionData_);
-                else if (positionType_ == D3_POSITION_TYPE || positionType_ == D4_POSITION_TYPE) {
+                if (positionType_ == NORMAL_SUPPLY_POSITION_TYPE) {
+                    actualActionData_ = _processNormalSupplyAction(nftId_, nftConfig_, positionIndex_, positionData_, emode_, actionData_);
+                } else if (positionType_ == NORMAL_BORROW_POSITION_TYPE) {
+                    actualActionData_ = _processNormalBorrowAction(nftId_, nftConfig_, positionIndex_, positionData_, emode_, actionData_);
+                } else if (positionType_ == D3_POSITION_TYPE || positionType_ == D4_POSITION_TYPE) {
                     DexKey memory dexKey_;
                     StartOperationParams memory s_ =  StartOperationParams({
                         isOperate: IS_OPERATE,
+                        estimate: IS_NOT_ESTIMATE, // estimate is only for liquidate
                         positionType: positionType_,
                         nftId: nftId_,
                         nftConfig: nftConfig_,
@@ -98,6 +103,8 @@ contract FluidMoneyMarketOperateModule is Helpers {
                                 ) {
                                 s_.permissionlessTokens = true;
                             }
+                        } else {
+                            revert(); // This shouldn't ever happen
                         }
 
                         (dexKey_, s_.tickLower, s_.tickUpper) = _decodeD3D4PositionData(positionData_, token0Configs_, token1Configs_);
@@ -106,17 +113,18 @@ contract FluidMoneyMarketOperateModule is Helpers {
                     // NOTE: No need to check these here because this must be checked while creating the position
                     // if (dexKey_.tickSpacing > MAX_TICK_SPACING ||
                     //     s_.tickLower >= s_.tickUpper ||
-                    //     s_.tickLower < MIN_TICK ||
-                    //     s_.tickUpper > MAX_TICK
+                    //     s_.tickLower <= MIN_TICK ||
+                    //     s_.tickUpper >= MAX_TICK
                     // ) revert();
 
-                    DEX_V2.startOperation(abi.encode(dexKey_, s_));
+                    bytes memory result_ = DEX_V2.startOperation(abi.encode(dexKey_, s_));
+                    actualActionData_ = _reconstructD3D4ActionData(actionData_, result_);
                 } else revert(); // This shouldn't ever happen
             }
         }
 
-        emit LogOperate(nftId_, positionIndex_, msg.sender, actionData_);
+        emit LogOperate(nftId_, positionIndex_, msg.sender, actualActionData_);
         
-        return (nftId_, positionIndex_);
+        return (nftId_, positionIndex_, actualActionData_);
     }
 }

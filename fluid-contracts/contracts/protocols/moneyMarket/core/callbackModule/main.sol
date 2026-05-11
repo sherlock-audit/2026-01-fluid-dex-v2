@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./helpers.sol";
 
@@ -51,6 +51,7 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                 s_.actionData,
                 (int256, int256, uint256, uint256, address)
             );
+            if (to_ == address(0)) revert();
 
             // First we will collect the accrued fees
             if (s_.positionType == D3_POSITION_TYPE) {
@@ -89,13 +90,10 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                     if (!(amount0Withdrawn_ == 0 && amount1Withdrawn_ == 0 && liquidityDecrease_ == 0)) revert();
                 }
 
-                bytes32 positionId_ = keccak256(abi.encode(D3_POSITION_TYPE, dexKey_));
-                bytes32 dexV2PositionId_ = keccak256(abi.encode(address(this), s_.tickLower, s_.tickUpper, s_.positionSalt));
-
                 (feeCollectionAmount0_, feeCollectionAmount1_) = _updateAndCollectFees(FeeCollectionParams({
                     nftId: s_.nftId,
-                    positionId: positionId_,
-                    dexV2PositionId: dexV2PositionId_,
+                    positionId: _encodePositionId(D3_POSITION_TYPE, dexKey_),
+                    dexV2PositionId: _encodeDexV2PositionId(s_.tickLower, s_.tickUpper, s_.positionSalt),
                     feeAccruedToken0: feeAccruedToken0_,
                     feeAccruedToken1: feeAccruedToken1_,
                     feeCollectionAmount0: feeCollectionAmount0_,
@@ -105,13 +103,15 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
 
                 if (_isD3D4PositionEmpty(s_.nftId, D3_POSITION_TYPE, dexKey_, s_.tickLower, s_.tickUpper, s_.positionSalt)) {
                     _handleD3PositionDeletion(s_);
-                    returnData_ = abi.encode(POSITION_DELETED);
+                    returnData_ = abi.encode(POSITION_DELETED, feeCollectionAmount0_, feeCollectionAmount1_);
                 } else {
-                    returnData_ = abi.encode(POSITION_NOT_DELETED);
+                    returnData_ = abi.encode(POSITION_NOT_DELETED, feeCollectionAmount0_, feeCollectionAmount1_);
                 }
 
-                _feeSettle(dexKey_.token0, feeAccruedToken0_, feeCollectionAmount0_, to_);
-                _feeSettle(dexKey_.token1, feeAccruedToken1_, feeCollectionAmount1_, to_);
+                if (s_.isOperate || !s_.estimate) {
+                    _feeSettle(dexKey_.token0, feeAccruedToken0_, feeCollectionAmount0_, to_);
+                    _feeSettle(dexKey_.token1, feeAccruedToken1_, feeCollectionAmount1_, to_);
+                }
             } else if (s_.positionType == D4_POSITION_TYPE) {               
                 // Collecting the accrued fees by passing zero payback amounts
                 returnData_ = DEX_V2.operate(
@@ -148,13 +148,10 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                     if (!(amount0Payedback_ == 0 && amount1Payedback_ == 0 && liquidityDecrease_ == 0)) revert();
                 }
 
-                bytes32 positionId_ = keccak256(abi.encode(D4_POSITION_TYPE, dexKey_));
-                bytes32 dexV2PositionId_ = keccak256(abi.encode(address(this), s_.tickLower, s_.tickUpper, s_.positionSalt));
-
                 (feeCollectionAmount0_, feeCollectionAmount1_) = _updateAndCollectFees(FeeCollectionParams({
                     nftId: s_.nftId,
-                    positionId: positionId_,
-                    dexV2PositionId: dexV2PositionId_,
+                    positionId: _encodePositionId(D4_POSITION_TYPE, dexKey_),
+                    dexV2PositionId: _encodeDexV2PositionId(s_.tickLower, s_.tickUpper, s_.positionSalt),
                     feeAccruedToken0: feeAccruedToken0_,
                     feeAccruedToken1: feeAccruedToken1_,
                     feeCollectionAmount0: feeCollectionAmount0_,
@@ -164,13 +161,15 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
 
                 if (_isD3D4PositionEmpty(s_.nftId, D4_POSITION_TYPE, dexKey_, s_.tickLower, s_.tickUpper, s_.positionSalt)) {
                     _deletePosition(s_.nftId, s_.nftConfig, s_.positionIndex);
-                    returnData_ = abi.encode(POSITION_DELETED);
+                    returnData_ = abi.encode(POSITION_DELETED, feeCollectionAmount0_, feeCollectionAmount1_);
                 } else {
-                    returnData_ = abi.encode(POSITION_NOT_DELETED);
+                    returnData_ = abi.encode(POSITION_NOT_DELETED, feeCollectionAmount0_, feeCollectionAmount1_);
                 }
 
-                _feeSettle(dexKey_.token0, feeAccruedToken0_, feeCollectionAmount0_, to_);
-                _feeSettle(dexKey_.token1, feeAccruedToken1_, feeCollectionAmount1_, to_);
+                if (s_.isOperate || !s_.estimate) {
+                    _feeSettle(dexKey_.token0, feeAccruedToken0_, feeCollectionAmount0_, to_);
+                    _feeSettle(dexKey_.token1, feeAccruedToken1_, feeCollectionAmount1_, to_);
+                }
             } else {
                 revert();
             }
@@ -209,8 +208,8 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                         )
                     );
 
-                    bytes32 positionId_;
                     uint256 liquidityIncrease_;
+                    bytes32 positionId_ = _encodePositionId(D3_POSITION_TYPE, dexKey_);
                     {
                         uint256 feeAccruedToken0_;
                         uint256 feeAccruedToken1_;
@@ -225,16 +224,16 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                                 liquidityIncrease_
                             ) = abi.decode(returnData_, (uint256, uint256, uint256, uint256, uint256));
 
-                            _depositSettle(dexKey_.token0, amount0Supplied_, feeAccruedToken0_, to_);
-                            _depositSettle(dexKey_.token1, amount1Supplied_, feeAccruedToken1_, to_);
+                            if (s_.isOperate || !s_.estimate) {
+                                _depositSettle(dexKey_.token0, amount0Supplied_, feeAccruedToken0_, to_);
+                                _depositSettle(dexKey_.token1, amount1Supplied_, feeAccruedToken1_, to_);
+                            }
                         }
-
-                        positionId_ = keccak256(abi.encode(D3_POSITION_TYPE, dexKey_));
 
                         _updateFeeStoredWithNewFeeAccrued(
                             s_.nftId, 
                             positionId_, 
-                            keccak256(abi.encode(address(this), s_.tickLower, s_.tickUpper, s_.positionSalt)), 
+                            _encodeDexV2PositionId(s_.tickLower, s_.tickUpper, s_.positionSalt), 
                             feeAccruedToken0_, 
                             feeAccruedToken1_
                         );
@@ -250,11 +249,15 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                         s_.permissionlessTokens
                     );
 
-                    returnData_ = abi.encode(POSITION_NOT_DELETED);
+                    (uint256 amount0Supplied_, uint256 amount1Supplied_) = abi.decode(returnData_, (uint256, uint256));
+                    returnData_ = abi.encode(POSITION_NOT_DELETED, amount0Supplied_, amount1Supplied_);
 
                     // NOTE: We dont check hf after deposits
                 } else if (amount0_ <= 0 && amount1_ <= 0) {
                     // Withdraw
+
+                    if (to_ == address(0)) revert();
+
                     if (s_.isOperate) {
                         if (amount0_ < 0) _verifyAmountLimits(amount0_);
                         if (amount1_ < 0) _verifyAmountLimits(amount1_);
@@ -293,16 +296,17 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                                 liquidityDecrease_
                             ) = abi.decode(returnData_, (uint256, uint256, uint256, uint256, uint256));
 
-                            _withdrawSettle(dexKey_.token0, amount0Withdrawn_, feeAccruedToken0_, to_);
-                            _withdrawSettle(dexKey_.token1, amount1Withdrawn_, feeAccruedToken1_, to_);
+                            if (s_.isOperate || !s_.estimate) {
+                                _withdrawSettle(dexKey_.token0, amount0Withdrawn_, feeAccruedToken0_, to_);
+                                _withdrawSettle(dexKey_.token1, amount1Withdrawn_, feeAccruedToken1_, to_);
+                            }
                         }
 
-                        bytes32 positionId_ = keccak256(abi.encode(D3_POSITION_TYPE, dexKey_));
-
+                        bytes32 positionId_ = _encodePositionId(D3_POSITION_TYPE, dexKey_);
                         _updateFeeStoredWithNewFeeAccrued(
                             s_.nftId, 
                             positionId_, 
-                            keccak256(abi.encode(address(this), s_.tickLower, s_.tickUpper, s_.positionSalt)), 
+                            _encodeDexV2PositionId(s_.tickLower, s_.tickUpper, s_.positionSalt), 
                             feeAccruedToken0_, 
                             feeAccruedToken1_
                         );
@@ -330,6 +334,9 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
             } else if (s_.positionType == D4_POSITION_TYPE) {
                 if (amount0_ >= 0 && amount1_ >= 0) {
                     // Borrow
+
+                    if (to_ == address(0)) revert();
+
                     if (amount0_ > 0) _verifyAmountLimits(amount0_);
                     if (amount1_ > 0) _verifyAmountLimits(amount1_);
 
@@ -356,37 +363,40 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                     );
 
                     uint256 liquidityIncrease_;
-                    uint256 feeAccruedToken0_;
-                    uint256 feeAccruedToken1_;
+                    bytes32 positionId_ = _encodePositionId(D4_POSITION_TYPE, dexKey_);
                     {
-                        uint256 amount0Borrowed_;
-                        uint256 amount1Borrowed_;
-                        (
-                            amount0Borrowed_, 
-                            amount1Borrowed_, 
-                            feeAccruedToken0_, 
-                            feeAccruedToken1_, 
-                            liquidityIncrease_
-                        ) = abi.decode(returnData_, (uint256, uint256, uint256, uint256, uint256));
+                        uint256 feeAccruedToken0_;
+                        uint256 feeAccruedToken1_;
+                        {
+                            uint256 amount0Borrowed_;
+                            uint256 amount1Borrowed_;
+                            (
+                                amount0Borrowed_, 
+                                amount1Borrowed_, 
+                                feeAccruedToken0_, 
+                                feeAccruedToken1_, 
+                                liquidityIncrease_
+                            ) = abi.decode(returnData_, (uint256, uint256, uint256, uint256, uint256));
 
-                        // Settle is happening before below storage updates, we put it here because of stack to deep 
-                        // This should not an issue because we have reentrancy checks and there is not callback also
-                        _borrowSettle(dexKey_.token0, amount0Borrowed_, feeAccruedToken0_, to_);
-                        _borrowSettle(dexKey_.token1, amount1Borrowed_, feeAccruedToken1_, to_);
+                            // Settle is happening before below storage updates, we put it here because of stack to deep 
+                            // This should not an issue because we have reentrancy checks and there is not callback also
+                            if (s_.isOperate || !s_.estimate) {
+                                _borrowSettle(dexKey_.token0, amount0Borrowed_, feeAccruedToken0_, to_);
+                                _borrowSettle(dexKey_.token1, amount1Borrowed_, feeAccruedToken1_, to_);
+                            }
+                        }
+
+                        _updateFeeStoredWithNewFeeAccrued(
+                            s_.nftId, 
+                            positionId_, 
+                            _encodeDexV2PositionId(s_.tickLower, s_.tickUpper, s_.positionSalt), 
+                            feeAccruedToken0_, 
+                            feeAccruedToken1_
+                        );
                     }
 
-                    // NOTE: We are calculating positionId twice below to prevent stack too deep
-        
-                    _updateFeeStoredWithNewFeeAccrued(
-                        s_.nftId, 
-                        keccak256(abi.encode(D4_POSITION_TYPE, dexKey_)), 
-                        keccak256(abi.encode(address(this), s_.tickLower, s_.tickUpper, s_.positionSalt)), 
-                        feeAccruedToken0_, 
-                        feeAccruedToken1_
-                    );
-
                     _checkAndUpdateCapsForD3D4LiquidityIncrease(
-                        keccak256(abi.encode(D4_POSITION_TYPE, dexKey_)), 
+                        positionId_, 
                         D4_DEX_TYPE,
                         dexKey_, 
                         s_.tickLower, 
@@ -396,11 +406,13 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                     );
 
                     // We check hf after borrows
-                    if (s_.isOperate) {
-                        _checkHf(s_.nftId, IS_OPERATE);
-                    }
+                    // NOTE: Borrow happens during operate only, hence skipping the check
+                    // if (s_.isOperate) {
+                    _checkHf(s_.nftId, IS_OPERATE);
+                    // }
 
-                    returnData_ = abi.encode(POSITION_NOT_DELETED);
+                    (uint256 amount0Borrowed_, uint256 amount1Borrowed_) = abi.decode(returnData_, (uint256, uint256));
+                    returnData_ = abi.encode(POSITION_NOT_DELETED, amount0Borrowed_, amount1Borrowed_);
                 } else if (amount0_ <= 0 && amount1_ <= 0) {
                     // Payback
 
@@ -442,23 +454,21 @@ contract FluidMoneyMarketCallbackImplementation is Helpers {
                                 liquidityDecrease_
                             ) = abi.decode(returnData_, (uint256, uint256, uint256, uint256, uint256));
 
-                            _paybackSettle(dexKey_.token0, amount0Payedback_, feeAccruedToken0_, to_);
-                            _paybackSettle(dexKey_.token1, amount1Payedback_, feeAccruedToken1_, to_);
+                            if (s_.isOperate || !s_.estimate) {
+                                _paybackSettle(dexKey_.token0, amount0Payedback_, feeAccruedToken0_, to_);
+                                _paybackSettle(dexKey_.token1, amount1Payedback_, feeAccruedToken1_, to_);
+                            }
                         }
+                        bytes32 positionId_ = _encodePositionId(D4_POSITION_TYPE, dexKey_);
+                        _updateFeeStoredWithNewFeeAccrued(
+                            s_.nftId, 
+                            positionId_,
+                            _encodeDexV2PositionId(s_.tickLower, s_.tickUpper, s_.positionSalt), 
+                            feeAccruedToken0_, 
+                            feeAccruedToken1_
+                        );
 
-                        {
-                            bytes32 positionId_ = keccak256(abi.encode(D4_POSITION_TYPE, dexKey_));
-
-                            _updateFeeStoredWithNewFeeAccrued(
-                                s_.nftId, 
-                                positionId_,
-                                keccak256(abi.encode(address(this), s_.tickLower, s_.tickUpper, s_.positionSalt)), 
-                                feeAccruedToken0_, 
-                                feeAccruedToken1_
-                            );
-
-                            _updatePositionCapsForD3D4LiquidityDecrease(positionId_, s_.tickLower, s_.tickUpper, liquidityDecrease_);
-                        }
+                        _updatePositionCapsForD3D4LiquidityDecrease(positionId_, s_.tickLower, s_.tickUpper, liquidityDecrease_);
                     }
 
                     // Decoding here again to get amount0Payedback_ and amount1Payedback_ because doing it above was giving stack too deep

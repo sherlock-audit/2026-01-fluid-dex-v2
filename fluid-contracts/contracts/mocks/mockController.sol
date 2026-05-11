@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import { SwapInInternalParams, SwapOutInternalParams, SwapInParams, SwapOutParams } from "../protocols/dexV2/dexTypes/common/d3d4common/structs.sol";
 import { FluidDexV2D3SwapModule } from "../protocols/dexV2/dexTypes/d3/core/swapModule.sol";

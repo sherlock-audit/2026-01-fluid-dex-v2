@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity >=0.8.21 <=0.8.29;
+pragma solidity >=0.8.21 <=0.8.34;
 
 import { IProxy } from "../../infiniteProxy/interfaces/iProxy.sol";
 import { Structs as AdminModuleStructs } from "../adminModule/structs.sol";
