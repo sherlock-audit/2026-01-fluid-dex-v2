@@ -24,7 +24,8 @@ import { TokenConfig } from "../../../contracts/protocols/moneyMarket/core/admin
 import { SwapInParams } from "../../../contracts/protocols/dexV2/dexTypes/common/d3d4common/structs.sol";
 import { DepositParams, WithdrawParams } from "../../../contracts/protocols/dexV2/dexTypes/d3/other/structs.sol";
 import { LiquidateParams, HfInfo } from "../../../contracts/protocols/moneyMarket/core/other/structs.sol";
-import { FluidLiquidateEstimate } from "../../../contracts/protocols/moneyMarket/core/other/error.sol";
+import { FluidLiquidateEstimate, FluidMoneyMarketError } from "../../../contracts/protocols/moneyMarket/core/other/error.sol";
+import { ErrorTypes } from "../../../contracts/protocols/moneyMarket/core/other/errorTypes.sol";
 
 // DexV2 D3 and D4 imports (modules are deployed in DexV2BaseSetup)
 import { FluidDexV2D3AdminModule } from "../../../contracts/protocols/dexV2/dexTypes/d3/admin/main.sol";
@@ -33,6 +34,37 @@ import { FluidDexV2D3UserModule } from "../../../contracts/protocols/dexV2/dexTy
 import { FluidDexV2D4AdminModule } from "../../../contracts/protocols/dexV2/dexTypes/d4/admin/main.sol";
 import { FluidDexV2D4SwapModule } from "../../../contracts/protocols/dexV2/dexTypes/d4/core/swapModule.sol";
 import { FluidDexV2D4UserModule } from "../../../contracts/protocols/dexV2/dexTypes/d4/core/userModule.sol";
+
+contract StepwiseMockOracleMM {
+    mapping(address => uint256) public tokenPrices;
+
+    address public stepToken;
+    uint256 public stepAfterCollateralReads;
+    uint256 public stepPrice;
+    uint256 public liquidateCollateralReads;
+
+    function setPrice(address token_, uint256 price_) external {
+        tokenPrices[token_] = price_;
+    }
+
+    function setCollateralPriceStep(address token_, uint256 stepAfterCollateralReads_, uint256 stepPrice_) external {
+        stepToken = token_;
+        stepAfterCollateralReads = stepAfterCollateralReads_;
+        stepPrice = stepPrice_;
+    }
+
+    function getPrice(address token0_, uint256, bool isOperate_, bool isCollateral_) external returns (uint256 price_) {
+        if (!isOperate_ && isCollateral_ && token0_ == stepToken) {
+            liquidateCollateralReads++;
+            if (liquidateCollateralReads > stepAfterCollateralReads) {
+                return stepPrice;
+            }
+        }
+
+        price_ = tokenPrices[token0_];
+        require(price_ > 0, "StepwiseMockOracleMM: Price not set for token");
+    }
+}
 
 /// @title Money Market Test
 /// @notice Test contract for Money Market functionality
@@ -4558,6 +4590,39 @@ contract MoneyMarketTest is MoneyMarketTestBaseSetup {
         oracle.setPrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
     }
 
+    function _normalizedShortfall(HfInfo memory hfInfo) internal pure returns (uint256) {
+        if (hfInfo.debtValue > hfInfo.normalizedCollateralValue) {
+            return hfInfo.debtValue - hfInfo.normalizedCollateralValue;
+        }
+
+        return 0;
+    }
+
+    function _listDAIFor1207() internal {
+        (bool success,) = address(moneyMarket).call(
+            abi.encodeWithSelector(
+                moneyMarketAdminModule.listToken.selector,
+                address(DAI),
+                1, // collateralClass (1 = permissioned, 0 = not enabled)
+                1, // debtClass (1 = permissioned, 0 = not enabled)
+                700, // collateralFactor (70%)
+                750, // liquidationThreshold (75%)
+                50 // liquidationPenalty (5%)
+            )
+        );
+        require(success, "Failed to list DAI");
+
+        (success,) = address(moneyMarket).call(
+            abi.encodeWithSelector(moneyMarketAdminModule.updateTokenSupplyCap.selector, address(DAI), 1000000 * 1e18)
+        );
+        require(success, "Failed to set DAI supply cap");
+
+        (success,) = address(moneyMarket).call(
+            abi.encodeWithSelector(moneyMarketAdminModule.updateTokenDebtCap.selector, address(DAI), 1000000 * 1e18)
+        );
+        require(success, "Failed to set DAI debt cap");
+    }
+
     /// @notice Full liquidation via type(uint256).max must succeed when it clears all debt
     function testLiquidationFullRepayNormalBorrow() public {
         uint256 nftId = _setupLiquidatablePosition();
@@ -4678,45 +4743,28 @@ contract MoneyMarketTest is MoneyMarketTestBaseSetup {
         vm.stopPrank();
     }
 
-    /// @notice Liquidation that worsens HF on a solvent position must still revert
-    function testLiquidationPartialStillEnforcesHfDeteriorated() public {
-        _listUSDC();
+    /// @notice The post-liquidation guard must revert if normalized shortfall increases.
+    function testLiquidationRevertsWhenNormalizedShortfallIncreases() public {
+        uint256 nftId = _setupLiquidatablePosition();
 
-        vm.deal(address(this), address(this).balance + 10 ether);
-        deal(address(USDC), bob, 1000000 * 1e6);
+        StepwiseMockOracleMM stepwiseOracle = new StepwiseMockOracleMM();
+        stepwiseOracle.setPrice(NATIVE_TOKEN_ADDRESS, 3000 * 1e27);
+        stepwiseOracle.setPrice(address(USDC), 1e27);
+        // Initial HF and withdraw pricing use $3,000 ETH; the final HF read uses $1,000.
+        stepwiseOracle.setCollateralPriceStep(NATIVE_TOKEN_ADDRESS, 2, 1000 * 1e27);
 
-        // Supply 1 ETH as collateral, borrow 2600 USDC
-        bytes memory ethSupplyData = abi.encode(1, 1, 1 ether);
-        (uint256 nftId,,) = moneyMarket.operate{value: 1 ether}(0, 0, ethSupplyData);
-
-        bytes memory usdcBorrowData = abi.encode(2, 2, 2600 * 1e6, address(this));
-        moneyMarket.operate(nftId, 0, usdcBorrowData);
-
-        // Drop ETH from $4000 to $2700
-        // collateralValue = $2700, debtValue = $2600
-        // collateral > debt so maxLiquidationPenalty > 0 (solvent)
-        // HF = (2700 * 0.85) / 2600 ≈ 0.883 (liquidatable, solvent)
-        // maxLP = ((2700 - 2600) * 1000) / 2600 - 1 ≈ 37 (3.7%)
-        oracle.setPrice(NATIVE_TOKEN_ADDRESS, 2700 * 1e27);
-
-        // With maxLP capped at 3.7% and token LP at 5%, effective LP = 3.7%
-        // For partial liquidation of amount X:
-        // HF'(X) = 0.85 * (2700 - 1.037*X) / (2600 - X)
-        // dHF'/dX = 0.85 * (2700 - 1.037*2600) / (2600 - X)^2
-        //         = 0.85 * (2700 - 2696.2) / (2600 - X)^2
-        //         = 0.85 * 3.8 / (2600 - X)^2  > 0
-        // So HF improves, which means HfDeteriorated should NOT trigger for reasonable amounts.
-        // But if collateral were exactly at debt * (1 + LP_eff), HF would stay constant.
-        // Let's set up a position where collateral < debt so maxLP = 0.
-        // When maxLP = 0, the HfDeteriorated check is skipped (by design).
-        // So this test just verifies the check still exists when maxLP > 0 and 
-        // HF does improve (no revert). That's a positive regression test.
+        vm.prank(admin);
+        (bool success,) = address(moneyMarket).call(
+            abi.encodeWithSelector(moneyMarketAdminModule.updateOracle.selector, address(stepwiseOracle))
+        );
+        require(success, "Failed to set stepwise oracle");
 
         vm.startPrank(bob);
         USDC.approve(address(moneyMarket), type(uint256).max);
 
-        // Repay a small amount ($600) — HF should improve slightly, staying under hfLimit
-        bytes memory paybackData = abi.encode(uint256(600 * 1e6));
+        vm.expectRevert(
+            abi.encodeWithSelector(FluidMoneyMarketError.selector, ErrorTypes.LiquidateModule__ShortfallIncreased)
+        );
         moneyMarket.liquidate(
             LiquidateParams({
                 nftId: nftId,
@@ -4724,14 +4772,102 @@ contract MoneyMarketTest is MoneyMarketTestBaseSetup {
                 withdrawPositionIndex: 1,
                 to: bob,
                 estimate: false,
+                paybackData: abi.encode(uint256(100 * 1e6))
+            })
+        );
+        vm.stopPrank();
+    }
+
+    /// @notice Original 1207 path: HF can decrease while the absolute normalized shortfall improves
+    function testLiquidationAllowsOriginal1207HfDecreaseWhenShortfallImproves() public {
+        _listUSDC();
+        _listDAIFor1207();
+
+        oracle.setPrice(address(DAI), 2 * 1e27);
+        deal(address(DAI), address(this), 100000 * 1e18);
+        deal(address(USDC), address(this), 100000 * 1e6);
+        deal(address(USDC), bob, 100000 * 1e6);
+
+        // DAI has 75% LT, USDC has 85% LT. Liquidating the higher-LT USDC collateral
+        // lowers the HF ratio, but still reduces the protocol's normalized shortfall.
+        DAI.approve(address(moneyMarket), type(uint256).max);
+        bytes memory daiSupplyData = abi.encode(1, 3, 1000 * 1e18);
+        (uint256 nftId,,) = moneyMarket.operate(0, 0, daiSupplyData);
+
+        USDC.approve(address(moneyMarket), type(uint256).max);
+        bytes memory usdcSupplyData = abi.encode(1, 2, 1100 * 1e6);
+        moneyMarket.operate(nftId, 0, usdcSupplyData);
+
+        bytes memory usdcBorrowData = abi.encode(2, 2, 1900 * 1e6, address(this));
+        moneyMarket.operate(nftId, 0, usdcBorrowData);
+
+        oracle.setPrice(address(DAI), 1 * 1e27);
+
+        HfInfo memory hfBefore = moneyMarket.getHfInfo(nftId, false);
+        uint256 shortfallBefore = _normalizedShortfall(hfBefore);
+        assertLt(hfBefore.hf, 1e27, "Position should be liquidatable");
+        assertGt(shortfallBefore, 0, "Position should have normalized shortfall");
+
+        vm.startPrank(bob);
+        USDC.approve(address(moneyMarket), type(uint256).max);
+
+        uint256 paybackAmount = 400 * 1e6;
+        bytes memory paybackData = abi.encode(paybackAmount);
+        (, bytes memory withdrawData) = moneyMarket.liquidate(
+            LiquidateParams({
+                nftId: nftId,
+                paybackPositionIndex: 3,
+                withdrawPositionIndex: 2,
+                to: bob,
+                estimate: false,
                 paybackData: paybackData
             })
         );
         vm.stopPrank();
 
-        HfInfo memory hfInfo = moneyMarket.getHfInfo(nftId, false);
-        assertTrue(hfInfo.debtValue > 0, "Should still have remaining debt");
-        assertTrue(hfInfo.hf > 0.883e27, "HF should have improved after partial liquidation");
+        uint256 withdrawAmount = abi.decode(withdrawData, (uint256));
+        assertGt(withdrawAmount, paybackAmount, "Liquidator should receive USDC collateral plus penalty");
+
+        HfInfo memory hfAfter = moneyMarket.getHfInfo(nftId, false);
+        assertLt(hfAfter.hf, hfBefore.hf, "HF ratio should decrease in the original 1207 scenario");
+        assertLt(_normalizedShortfall(hfAfter), shortfallBefore, "Normalized shortfall should improve");
+    }
+
+    /// @notice Covers the feedback liveness window: HF decreases, but liquidation is still useful
+    function testLiquidationLivenessWindowAllowsHighLtCollateralWhenShortfallImproves() public {
+        _listUSDC();
+        _listDAIFor1207();
+
+        oracle.setPrice(address(DAI), 20 * 1e27);
+        deal(address(DAI), address(this), 100000 * 1e18);
+        deal(address(USDC), address(this), 100000 * 1e6);
+
+        DAI.approve(address(moneyMarket), type(uint256).max);
+        bytes memory daiSupplyData = abi.encode(1, 3, 161 ether);
+        (uint256 nftId,,) = moneyMarket.operate(0, 0, daiSupplyData);
+
+        USDC.approve(address(moneyMarket), type(uint256).max);
+        bytes memory usdcSupplyData = abi.encode(1, 2, 10_350 * 1e6);
+        moneyMarket.operate(nftId, 0, usdcSupplyData);
+
+        bytes memory usdcBorrowData = abi.encode(2, 2, 10000 * 1e6, address(this));
+        moneyMarket.operate(nftId, 0, usdcBorrowData);
+
+        oracle.setPrice(address(DAI), 1 * 1e27);
+
+        HfInfo memory hfBefore = moneyMarket.getHfInfo(nftId, false);
+        uint256 shortfallBefore = _normalizedShortfall(hfBefore);
+        assertGt(hfBefore.collateralValue, hfBefore.debtValue, "max liquidation penalty should be active");
+        assertLt(hfBefore.hf, 8925e23, "HF should be below the high-LT liquidation boundary");
+        assertGt(hfBefore.hf, 850e24, "HF should be inside the liveness window");
+
+        bytes memory withdrawData = _liquidateNormalBorrow(nftId, 3, 2, 1000 * 1e6);
+        uint256 withdrawAmount = abi.decode(withdrawData, (uint256));
+        assertGt(withdrawAmount, 1000 * 1e6, "Liquidator should receive USDC collateral plus penalty");
+
+        HfInfo memory hfAfter = moneyMarket.getHfInfo(nftId, false);
+        assertLt(hfAfter.hf, hfBefore.hf, "HF ratio should decrease inside the liveness window");
+        assertLt(_normalizedShortfall(hfAfter), shortfallBefore, "Normalized shortfall should improve");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

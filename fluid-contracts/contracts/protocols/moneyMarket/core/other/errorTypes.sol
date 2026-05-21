@@ -43,8 +43,8 @@ library ErrorTypes {
     /// @notice thrown when health factor limit exceeded after liquidation
     uint256 internal constant LiquidateModule__HfLimitExceeded = 301004;
 
-    /// @notice thrown when health factor deteriorated after liquidation
-    uint256 internal constant LiquidateModule__HfDeteriorated = 301005;
+    /// @notice thrown when normalized shortfall increases after liquidation
+    uint256 internal constant LiquidateModule__ShortfallIncreased = 301005;
 
     /***********************************|
     |         Base Module Errors        | 

@@ -62,10 +62,15 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                 v_.maxLiquidationPenalty = 0;
             } else {
                 v_.maxLiquidationPenalty = ((hfInfo_.collateralValue - hfInfo_.debtValue) * THREE_DECIMALS) / hfInfo_.debtValue;
-                if (v_.maxLiquidationPenalty > 0) v_.maxLiquidationPenalty -= 1; // Explicitly rounding down max LP by 0.1%
+                if (v_.maxLiquidationPenalty > 0) {
+                    unchecked {
+                        v_.maxLiquidationPenalty -= 1; // Explicitly rounding down max LP by 0.1%
+                    }
+                }
             }
 
-            v_.hfBefore = hfInfo_.hf;
+            v_.debtValueBefore = hfInfo_.debtValue;
+            v_.normalizedCollateralValueBefore = hfInfo_.normalizedCollateralValue;
         }
 
         v_.nftConfig = _nftConfigs[params_.nftId];
@@ -638,7 +643,21 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             HfInfo memory hfInfo_ = _getHfInfo(params_.nftId, IS_LIQUIDATE);
             if (hfInfo_.debtValue != 0) {
                 if (hfInfo_.hf > hfLimit_) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__HfLimitExceeded);
-                if (v_.maxLiquidationPenalty > 0 && hfInfo_.hf < v_.hfBefore) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__HfDeteriorated);
+
+                // HF can decrease during risk-reducing liquidations; shortfall tracks absolute bad-debt exposure.
+                uint256 shortfallBefore_;
+                uint256 shortfallAfter_;
+                unchecked {
+                    if (v_.debtValueBefore > v_.normalizedCollateralValueBefore) {
+                        shortfallBefore_ = v_.debtValueBefore - v_.normalizedCollateralValueBefore;
+                    }
+
+                    if (hfInfo_.debtValue > hfInfo_.normalizedCollateralValue) {
+                        shortfallAfter_ = hfInfo_.debtValue - hfInfo_.normalizedCollateralValue;
+                    }
+                }
+
+                if (shortfallAfter_ > shortfallBefore_) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__ShortfallIncreased);
             }
         }
 
