@@ -7,7 +7,8 @@ struct LiquidateVariables {
     uint256 moneyMarketVariables;
     IMMOracle oracle;
     uint256 maxLiquidationPenalty;
-    uint256 hfBefore;
+    uint256 debtValueBefore;
+    uint256 normalizedCollateralValueBefore;
     uint256 nftConfig;
     uint256 emode;
     uint256 numberOfPositions;
