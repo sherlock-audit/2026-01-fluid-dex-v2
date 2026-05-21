@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "../other/commonImport.sol";
 import { PendingTransfers as PT } from "../../../../../libraries/pendingTransfers.sol";
@@ -99,8 +99,8 @@ contract FluidDexV2D3SwapModule is CommonImportD3Other {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountOutRawAdjusted_ is limited to X86, hence lpFeeAccruedRawAdjusted_ will be surely less than that
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token1DenominatorPrecision * c_.token1SupplyExchangePrice) / (c_.token1NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
-                PT.addPendingSupply(msg.sender, params_.dexKey.token0, int256(params_.amountIn));
-                PT.addPendingSupply(msg.sender, params_.dexKey.token1, -int256(amountOut_));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token0, SafeCast.toInt256(params_.amountIn));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(amountOut_));
             } else {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountOutRawAdjusted_ is limited to X86
                 amountOut_ = ((amountOutRawAdjusted_ * c_.token0DenominatorPrecision * c_.token0SupplyExchangePrice) / (c_.token0NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION));
@@ -117,8 +117,8 @@ contract FluidDexV2D3SwapModule is CommonImportD3Other {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountOutRawAdjusted_ is limited to X86, hence lpFeeAccruedRawAdjusted_ will be surely less than that
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token0DenominatorPrecision * c_.token0SupplyExchangePrice) / (c_.token0NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
-                PT.addPendingSupply(msg.sender, params_.dexKey.token1, int256(params_.amountIn));
-                PT.addPendingSupply(msg.sender, params_.dexKey.token0, -int256(amountOut_));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token1, SafeCast.toInt256(params_.amountIn));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(amountOut_));
             }
 
             emit LogSwapIn(dexType_, dexId_, msg.sender, params_.swap0To1, params_.amountIn, amountOut_, protocolFeeAccrued_, lpFeeAccrued_);
@@ -206,8 +206,8 @@ contract FluidDexV2D3SwapModule is CommonImportD3Other {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountInRawAdjusted_ is limited to X86, hence lpFeeAccruedRawAdjusted_ will be surely less than that
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token0DenominatorPrecision * c_.token0SupplyExchangePrice) / (c_.token0NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
-                PT.addPendingSupply(msg.sender, params_.dexKey.token0, int256(amountIn_));
-                PT.addPendingSupply(msg.sender, params_.dexKey.token1, -int256(params_.amountOut));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token0, SafeCast.toInt256(amountIn_));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(params_.amountOut));
             } else {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountInRawAdjusted_ is limited to X86
                 amountIn_ = ((amountInRawAdjusted_ * c_.token1DenominatorPrecision * c_.token1SupplyExchangePrice) / (c_.token1NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION)) + 1; // Just adding 1 so protocol remains on the winning side
@@ -223,8 +223,8 @@ contract FluidDexV2D3SwapModule is CommonImportD3Other {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountInRawAdjusted_ is limited to X86, hence lpFeeAccruedRawAdjusted_ will be surely less than that
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token1DenominatorPrecision * c_.token1SupplyExchangePrice) / (c_.token1NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
-                PT.addPendingSupply(msg.sender, params_.dexKey.token1, int256(amountIn_));
-                PT.addPendingSupply(msg.sender, params_.dexKey.token0, -int256(params_.amountOut));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token1, SafeCast.toInt256(amountIn_));
+                PT.addPendingSupply(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(params_.amountOut));
             }
 
             emit LogSwapOut(dexType_, dexId_, msg.sender, params_.swap0To1, amountIn_, params_.amountOut, protocolFeeAccrued_, lpFeeAccrued_);

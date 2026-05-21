@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "../other/commonImport.sol";
 
 struct LiquidateVariables {
     uint256 moneyMarketVariables;
-    IOracle oracle;
+    IMMOracle oracle;
     uint256 maxLiquidationPenalty;
+    uint256 debtValueBefore;
+    uint256 normalizedCollateralValueBefore;
     uint256 nftConfig;
     uint256 emode;
     uint256 numberOfPositions;

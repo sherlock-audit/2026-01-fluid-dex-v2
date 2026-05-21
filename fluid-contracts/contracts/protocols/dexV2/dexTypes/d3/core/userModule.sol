@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "../other/commonImport.sol";
 import { PendingTransfers as PT } from "../../../../../libraries/pendingTransfers.sol";
@@ -133,8 +133,8 @@ contract FluidDexV2D3UserModule is CommonImportD3Other {
 
             // When user adds liquidity, he/she is supplying tokens to the protocol, hence a positive pending pending supply 
             // Subtracting fee accrued because user has to pay net less tokens
-            PT.addPendingSupply(msg.sender, params_.dexKey.token0, int256(v_.amount0) - int256(v_.feeAccruedToken0));
-            PT.addPendingSupply(msg.sender, params_.dexKey.token1, int256(v_.amount1) - int256(v_.feeAccruedToken1));
+            PT.addPendingSupply(msg.sender, params_.dexKey.token0, SafeCast.toInt256(v_.amount0) - SafeCast.toInt256(v_.feeAccruedToken0));
+            PT.addPendingSupply(msg.sender, params_.dexKey.token1, SafeCast.toInt256(v_.amount1) - SafeCast.toInt256(v_.feeAccruedToken1));
 
             emit LogDeposit(
                 dexType_, 
@@ -255,8 +255,8 @@ contract FluidDexV2D3UserModule is CommonImportD3Other {
         }
 
         // Add user pending supply
-        PT.addPendingSupply(msg.sender, params_.dexKey.token0, -int256(v_.amount0 + v_.feeAccruedToken0));
-        PT.addPendingSupply(msg.sender, params_.dexKey.token1, -int256(v_.amount1 + v_.feeAccruedToken1));
+        PT.addPendingSupply(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(v_.amount0 + v_.feeAccruedToken0));
+        PT.addPendingSupply(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(v_.amount1 + v_.feeAccruedToken1));
 
         emit LogWithdraw(
             dexType_, 

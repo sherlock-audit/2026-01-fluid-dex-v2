@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./userModuleInternals.sol";
 
@@ -68,9 +68,12 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
             // If fetchDynamicFeeFlag is ON, we always fetch the dynamic fee unless the controller is the swapper
             // This is called after syncing the dynamic fee variables so it gets synced fee variables
             if (((params_.dexVariables2 >> DSL.BITS_DEX_V2_VARIABLES2_FETCH_DYNAMIC_FEE_FLAG) & X1 == 1) && params_.dexKey.controller != msg.sender) {
+                if (params_.controllerData.length > MAX_CONTROLLER_DATA_LENGTH) {
+                    revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__ControllerDataTooLarge);
+                }
                 // Use low-level call with gas limit to prevent controller from blocking swaps
                 // Gas limit of 200K is sufficient for any reasonable fee calculation
-                (bool success_, bytes memory returnData_) = params_.dexKey.controller.call{gas: 200000}(
+                (bool success_, bytes memory returnData_) = params_.dexKey.controller.call{gas: CONTROLLER_FEE_FETCH_GAS}(
                     abi.encodeWithSelector(IController.fetchDynamicFeeForSwapIn.selector, params_)
                 );
                 // Only use the result if call succeeded and returned exactly 64 bytes (uint256 + bool)
@@ -109,7 +112,7 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
                 params_.swap0To1
             );
 
-            if (v_.nextTick < MIN_TICK || v_.nextTick > MAX_TICK) {
+            if (v_.nextTick <= MIN_TICK || v_.nextTick >= MAX_TICK) {
                 revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__NextTickOutOfBounds);
             }
 
@@ -235,7 +238,7 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
                     // Update Active Liquidity
                     unchecked {
                         // This can't go negative, but keeping the check in place for safety
-                        int256 newActiveLiquidity_ = int256(activeLiquidity_) + (params_.swap0To1 ? -tickData_.liquidityNet : tickData_.liquidityNet);
+                        int256 newActiveLiquidity_ = SafeCast.toInt256(activeLiquidity_) + (params_.swap0To1 ? -tickData_.liquidityNet : tickData_.liquidityNet);
                         // This will ideally never go negative, but adding the check for extra security
                         if (newActiveLiquidity_ < 0) {
                             revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__ActiveLiquidityUnderflow);
@@ -278,7 +281,7 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
                     revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__PriceImpactTooHigh);
                 }
 
-                int256 finalNetPriceImpact_ = isPositivePriceDiff_ ? int256(finalAbsolutePriceImpact_) : -int256(finalAbsolutePriceImpact_);
+                int256 finalNetPriceImpact_ = isPositivePriceDiff_ ? SafeCast.toInt256(finalAbsolutePriceImpact_) : -SafeCast.toInt256(finalAbsolutePriceImpact_);
             
                 params_.dexVariables2 = _updateDynamicFeeVariables(params_.dexVariables2, finalNetPriceImpact_);
             }
@@ -394,9 +397,12 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
             // If fetchDynamicFeeFlag is ON, we always fetch the dynamic fee unless the controller is the swapper
             // This is called after syncing the dynamic fee variables
             if (((params_.dexVariables2 >> DSL.BITS_DEX_V2_VARIABLES2_FETCH_DYNAMIC_FEE_FLAG) & X1 == 1) && params_.dexKey.controller != msg.sender) {
+                if (params_.controllerData.length > MAX_CONTROLLER_DATA_LENGTH) {
+                    revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__ControllerDataTooLarge);
+                }
                 // Use low-level call with gas limit to prevent controller from blocking swaps
                 // Gas limit of 200K is sufficient for any reasonable fee calculation
-                (bool success_, bytes memory returnData_) = params_.dexKey.controller.call{gas: 200000}(
+                (bool success_, bytes memory returnData_) = params_.dexKey.controller.call{gas: CONTROLLER_FEE_FETCH_GAS}(
                     abi.encodeWithSelector(IController.fetchDynamicFeeForSwapOut.selector, params_)
                 );
                 // Only use the result if call succeeded and returned exactly 64 bytes (uint256 + bool)
@@ -435,7 +441,7 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
                 params_.swap0To1
             );
 
-            if (v_.nextTick < MIN_TICK || v_.nextTick > MAX_TICK) {
+            if (v_.nextTick <= MIN_TICK || v_.nextTick >= MAX_TICK) {
                 revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__NextTickOutOfBounds);
             }
 
@@ -562,7 +568,7 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
 
                     // Update Active Liquidity
                     unchecked {
-                        int256 newActiveLiquidity_ = int256(activeLiquidity_) + (params_.swap0To1 ? -tickData_.liquidityNet : tickData_.liquidityNet);
+                        int256 newActiveLiquidity_ = SafeCast.toInt256(activeLiquidity_) + (params_.swap0To1 ? -tickData_.liquidityNet : tickData_.liquidityNet);
                         // This will ideally never go negative, but adding the check for extra security
                         if (newActiveLiquidity_ < 0) {
                             revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__ActiveLiquidityUnderflow);
@@ -605,7 +611,7 @@ abstract contract CommonSwapModuleInternals is CommonUserModuleInternals {
                     revert FluidDexV2D3D4Error(ErrorTypes.SwapModule__PriceImpactTooHigh);
                 }
 
-                int256 finalNetPriceImpact_ = isPositivePriceDiff_ ? int256(finalAbsolutePriceImpact_) : -int256(finalAbsolutePriceImpact_);
+                int256 finalNetPriceImpact_ = isPositivePriceDiff_ ? SafeCast.toInt256(finalAbsolutePriceImpact_) : -SafeCast.toInt256(finalAbsolutePriceImpact_);
                 params_.dexVariables2 = _updateDynamicFeeVariables(params_.dexVariables2, finalNetPriceImpact_);
 
             }

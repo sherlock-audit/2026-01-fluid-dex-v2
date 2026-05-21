@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "../other/commonImport.sol";
 import { PendingTransfers as PT } from "../../../../../libraries/pendingTransfers.sol";
@@ -99,11 +99,11 @@ contract FluidDexV2D4SwapModule is CommonImportD4Other {
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token1DenominatorPrecision * c_.token1BorrowExchangePrice) / (c_.token1NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
                 // Update Pending Transfers for token in
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, -int256(params_.amountIn));
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(params_.amountIn));
 
                 // Update Pending Transfers for token out
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, int256(amountOut_ + protocolFeeAccrued_ + lpFeeAccrued_)); // amount out is borrowed with fee
-                PT.addPendingSupply(msg.sender, params_.dexKey.token1, int256(protocolFeeAccrued_ + lpFeeAccrued_)); // Fee gets supplied to liquidity
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, SafeCast.toInt256(amountOut_ + protocolFeeAccrued_ + lpFeeAccrued_)); // amount out is borrowed with fee
+                PT.addPendingSupply(msg.sender, params_.dexKey.token1, SafeCast.toInt256(protocolFeeAccrued_ + lpFeeAccrued_)); // Fee gets supplied to liquidity
             } else {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountOutRawAdjusted_ is limited to X86
                 amountOut_ = ((amountOutRawAdjusted_ * c_.token0DenominatorPrecision * c_.token0BorrowExchangePrice) / (c_.token0NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION));
@@ -121,11 +121,11 @@ contract FluidDexV2D4SwapModule is CommonImportD4Other {
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token0DenominatorPrecision * c_.token0BorrowExchangePrice) / (c_.token0NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
                 // Update Pending Transfers for token in
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, -int256(params_.amountIn));
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(params_.amountIn));
 
                 // Update Pending Transfers for token out
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, int256(amountOut_ + protocolFeeAccrued_ + lpFeeAccrued_)); // amount out is borrowed with fee
-                PT.addPendingSupply(msg.sender, params_.dexKey.token0, int256(protocolFeeAccrued_ + lpFeeAccrued_)); // Fee gets supplied to liquidity
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, SafeCast.toInt256(amountOut_ + protocolFeeAccrued_ + lpFeeAccrued_)); // amount out is borrowed with fee
+                PT.addPendingSupply(msg.sender, params_.dexKey.token0, SafeCast.toInt256(protocolFeeAccrued_ + lpFeeAccrued_)); // Fee gets supplied to liquidity
             }
 
             emit LogSwapIn(dexType_, dexId_, msg.sender, params_.swap0To1, params_.amountIn, amountOut_, protocolFeeAccrued_, lpFeeAccrued_);
@@ -212,11 +212,11 @@ contract FluidDexV2D4SwapModule is CommonImportD4Other {
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token0DenominatorPrecision * c_.token0BorrowExchangePrice) / (c_.token0NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
                 // Update Pending Transfers for token in
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, -int256(amountIn_ - protocolFeeAccrued_ - lpFeeAccrued_)); // payback happens without fee
-                PT.addPendingSupply(msg.sender, params_.dexKey.token0, int256(protocolFeeAccrued_ + lpFeeAccrued_)); // fee gets supplied to liquidity
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, -SafeCast.toInt256(amountIn_ - protocolFeeAccrued_ - lpFeeAccrued_)); // payback happens without fee
+                PT.addPendingSupply(msg.sender, params_.dexKey.token0, SafeCast.toInt256(protocolFeeAccrued_ + lpFeeAccrued_)); // fee gets supplied to liquidity
 
                 // Update Pending Transfers for token out
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, int256(params_.amountOut));
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, SafeCast.toInt256(params_.amountOut));
             } else {
                 // NOTE: This calculation is inside unchecked but it wont overflow because amountInRawAdjusted_ is limited to X86
                 amountIn_ = ((amountInRawAdjusted_ * c_.token1DenominatorPrecision * c_.token1BorrowExchangePrice) / (c_.token1NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION)) + 1; // Just adding 1 so protocol remains on the winning side
@@ -233,11 +233,11 @@ contract FluidDexV2D4SwapModule is CommonImportD4Other {
                 lpFeeAccrued_ = (lpFeeAccruedRawAdjusted_ * c_.token1DenominatorPrecision * c_.token1BorrowExchangePrice) / (c_.token1NumeratorPrecision * LC.EXCHANGE_PRICES_PRECISION);
 
                 // Update Pending Transfers for token in
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, -int256(amountIn_ - protocolFeeAccrued_ - lpFeeAccrued_)); // payback happens without fee
-                PT.addPendingSupply(msg.sender, params_.dexKey.token1, int256(protocolFeeAccrued_ + lpFeeAccrued_)); // fee gets supplied to liquidity
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token1, -SafeCast.toInt256(amountIn_ - protocolFeeAccrued_ - lpFeeAccrued_)); // payback happens without fee
+                PT.addPendingSupply(msg.sender, params_.dexKey.token1, SafeCast.toInt256(protocolFeeAccrued_ + lpFeeAccrued_)); // fee gets supplied to liquidity
 
                 // Update Pending Transfers for token out
-                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, int256(params_.amountOut));
+                PT.addPendingBorrow(msg.sender, params_.dexKey.token0, SafeCast.toInt256(params_.amountOut));
             }
 
             emit LogSwapOut(dexType_, dexId_, msg.sender, params_.swap0To1, amountIn_, params_.amountOut, protocolFeeAccrued_, lpFeeAccrued_);

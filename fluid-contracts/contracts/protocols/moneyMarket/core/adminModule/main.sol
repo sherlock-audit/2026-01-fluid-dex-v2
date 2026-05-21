@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./events.sol";
 
-// NOTE: @dev I have delibrately not added functions to update collateral class or debt class or liquidation threshold etc. as of now
+// NOTE: @dev I have deliberately not added functions to update collateral class or debt class as of now
 
 /// @title FluidMoneyMarketAdminModuleImplementation
 /// @notice Admin module for Money Market configuration and management
@@ -109,6 +109,9 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
         
         // Get the current oracle address (first 160 bits of _moneyMarketVariables)
         address oldOracle_ = address(uint160((_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_ORACLE_ADDRESS) & X160));
+
+        // Validate that the new oracle is different from the current one
+        if (newOracle_ == oldOracle_) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
         
         // Update the oracle address in _moneyMarketVariables
         // Clear the first 160 bits and set the new oracle address
@@ -138,12 +141,12 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
     }
 
     /// @notice Updates the min normalized collateral value
-    /// @param newMinNormalizedCollateralValue_ The new min normalized collateral value in 18 decimals
-    /// @dev Only callable by authorized addresses. Value should be in 18 decimals
+    /// @param newMinNormalizedCollateralValue_ The new min normalized collateral value in 27 decimals
+    /// @dev Only callable by authorized addresses. Value should be in 27 decimals.
     function updateMinNormalizedCollateralValue(uint256 newMinNormalizedCollateralValue_) external _onlyDelegateCall {
         // If you want zero then actually pass zero
-        if (newMinNormalizedCollateralValue_ != 0 && newMinNormalizedCollateralValue_ < EIGHTEEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
-        newMinNormalizedCollateralValue_ = newMinNormalizedCollateralValue_ / EIGHTEEN_DECIMALS;
+        if (newMinNormalizedCollateralValue_ != 0 && newMinNormalizedCollateralValue_ < TWENTY_SEVEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+        newMinNormalizedCollateralValue_ = newMinNormalizedCollateralValue_ / TWENTY_SEVEN_DECIMALS;
         if (newMinNormalizedCollateralValue_ > X12) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
 
         // Get the current min normalized collateral value
@@ -154,13 +157,16 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
             (newMinNormalizedCollateralValue_ << MSL.BITS_MONEY_MARKET_VARIABLES_MIN_NORMALIZED_COLLATERAL_VALUE);
         
         // Emit event
-        emit MinNormalizedCollateralValueUpdated(oldMinNormalizedCollateralValue_ * EIGHTEEN_DECIMALS, newMinNormalizedCollateralValue_ * EIGHTEEN_DECIMALS);
+        emit MinNormalizedCollateralValueUpdated(oldMinNormalizedCollateralValue_ * TWENTY_SEVEN_DECIMALS, newMinNormalizedCollateralValue_ * TWENTY_SEVEN_DECIMALS);
     }
 
     /// @notice Updates the HF (Health Factor) limit for liquidation
     /// @param newHfLimit_ The new HF limit in big number format (10|8)
     /// @dev Only callable by authorized addresses.
     function updateHfLimitForLiquidation(uint256 newHfLimit_) external _onlyDelegateCall {
+        // Validate that the new HF limit is at least 1.0 (TWENTY_SEVEN_DECIMALS) to prevent liquidation issues
+        if (newHfLimit_ < TWENTY_SEVEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
         // Get the current HF limit for liquidation (bits 170-187 of _moneyMarketVariables)
         uint256 oldHfLimit_ = (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_HF_LIMIT_FOR_LIQUIDATION) & X18;
         oldHfLimit_ = BM.fromBigNumber(oldHfLimit_, DEFAULT_EXPONENT_SIZE, DEFAULT_EXPONENT_MASK);
@@ -539,6 +545,66 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
         emit CollateralFactorUpdated(emode_, token_, tokenIndex_, oldCollateralFactor_, newCollateralFactor_);
     }
 
+    /// @notice Updates the liquidation threshold for a token in a specific emode or NO_EMODE
+    /// @param emode_ The emode to update (0 for NO_EMODE)
+    /// @param token_ The token address
+    /// @param newLiquidationThreshold_ The new liquidation threshold
+    /// @dev Only callable by authorized addresses
+    /// @dev For non-zero emode, the token config change bit must be set for this emode
+    /// @dev Can only increase the liquidation threshold to avoid making existing positions liquidatable
+    /// @dev Liquidation threshold must be > collateral factor and satisfy LP * LT <= 99%
+    function updateLiquidationThreshold(uint256 emode_, address token_, uint256 newLiquidationThreshold_) external _onlyDelegateCall {
+        // Validate token is listed
+        uint256 tokenIndex_ = _tokenIndex[token_];
+        if (tokenIndex_ == 0) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
+        // If emode is not NO_EMODE, validate emode exists and token config change bit is set
+        if (emode_ != NO_EMODE) {
+            uint256 totalEmodes_ = (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_EMODES) & X12;
+            if (emode_ > totalEmodes_) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
+            // Check if token config change bit is set for this emode
+            uint256 parent_ = (tokenIndex_ - 1) / 128;
+            uint256 bitPosition_ = ((tokenIndex_ - 1) % 128) * 2;
+            if ((_emodeMap[emode_][parent_] >> bitPosition_) & X1 == 0) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+        }
+
+        // Validate new liquidation threshold is within bounds
+        if (newLiquidationThreshold_ > THREE_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
+        // Get current token config
+        uint256 tokenConfig_ = _tokenConfigs[emode_][tokenIndex_];
+
+        // Get old liquidation threshold
+        uint256 oldLiquidationThreshold_ = (tokenConfig_ >> MSL.BITS_TOKEN_CONFIGS_LIQUIDATION_THRESHOLD) & X10;
+
+        // Only allow increasing the liquidation threshold to avoid making existing positions liquidatable
+        if (newLiquidationThreshold_ <= oldLiquidationThreshold_) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
+        // Validate collateral factor < new liquidation threshold (not allowing ==)
+        uint256 collateralFactor_ = (tokenConfig_ >> MSL.BITS_TOKEN_CONFIGS_COLLATERAL_FACTOR) & X10;
+        if (collateralFactor_ >= newLiquidationThreshold_) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
+        // Validate LP applied at new LT should not exceed 99%
+        uint256 liquidationPenalty_ = (tokenConfig_ >> MSL.BITS_TOKEN_CONFIGS_LIQUIDATION_PENALTY) & X10;
+        if (((newLiquidationThreshold_ * (THREE_DECIMALS + liquidationPenalty_)) / THREE_DECIMALS) > 990)
+            revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
+        // Update the liquidation threshold
+        _tokenConfigs[emode_][tokenIndex_] = (tokenConfig_ & ~(X10 << MSL.BITS_TOKEN_CONFIGS_LIQUIDATION_THRESHOLD)) |
+            (newLiquidationThreshold_ << MSL.BITS_TOKEN_CONFIGS_LIQUIDATION_THRESHOLD);
+
+        // If emode is not NO_EMODE, check if the updated config is now identical to NO_EMODE config
+        if (emode_ != NO_EMODE) {
+            if (_tokenConfigs[emode_][tokenIndex_] == _tokenConfigs[NO_EMODE][tokenIndex_]) {
+                revert FluidMoneyMarketError(ErrorTypes.AdminModule__EmodeConfigIdenticalToNoEmode);
+            }
+        }
+
+        // Emit event
+        emit LiquidationThresholdUpdated(emode_, token_, tokenIndex_, oldLiquidationThreshold_, newLiquidationThreshold_);
+    }
+
     /// @notice Updates the liquidation penalty for a token in a specific emode or NO_EMODE
     /// @param emode_ The emode to update (0 for NO_EMODE)
     /// @param token_ The token address
@@ -697,13 +763,14 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
         v_.currentMaxRawAdjustedAmount0 = (v_.positionCapConfigs >> MSL.BITS_POSITION_CAP_CONFIGS_TYPE_3_AND_4_CURRENT_MAX_RAW_ADJUSTED_AMOUNT_0) & X64;
         v_.currentMaxRawAdjustedAmount1 = (v_.positionCapConfigs >> MSL.BITS_POSITION_CAP_CONFIGS_TYPE_3_AND_4_CURRENT_MAX_RAW_ADJUSTED_AMOUNT_1) & X64;
         
+        // Get token indices and validate tokens are listed
+        v_.token0Index = _tokenIndex[dexKey_.token0];
+        v_.token1Index = _tokenIndex[dexKey_.token1];
+        if (v_.token0Index == 0 || v_.token1Index == 0) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
         // Convert token amounts to raw adjusted amounts using exchange prices
         (v_.exchangePrice0, ) = _getExchangePrices(dexKey_.token0);
         (v_.exchangePrice1, ) = _getExchangePrices(dexKey_.token1);
-        
-        // Get token indices
-        v_.token0Index = _tokenIndex[dexKey_.token0];
-        v_.token1Index = _tokenIndex[dexKey_.token1];
         
         // Get decimals from token configs
         v_.token0Decimals = (_tokenConfigs[NO_EMODE][v_.token0Index] >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS) & X5;
@@ -768,13 +835,14 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
         v_.currentMaxRawAdjustedAmount0 = (v_.positionCapConfigs >> MSL.BITS_POSITION_CAP_CONFIGS_TYPE_3_AND_4_CURRENT_MAX_RAW_ADJUSTED_AMOUNT_0) & X64;
         v_.currentMaxRawAdjustedAmount1 = (v_.positionCapConfigs >> MSL.BITS_POSITION_CAP_CONFIGS_TYPE_3_AND_4_CURRENT_MAX_RAW_ADJUSTED_AMOUNT_1) & X64;
         
+        // Get token indices and validate tokens are listed
+        v_.token0Index = _tokenIndex[dexKey_.token0];
+        v_.token1Index = _tokenIndex[dexKey_.token1];
+        if (v_.token0Index == 0 || v_.token1Index == 0) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
+
         // Convert token amounts to raw adjusted amounts using exchange prices (use borrow exchange price for D4 debt)
         (, v_.exchangePrice0) = _getExchangePrices(dexKey_.token0);
         (, v_.exchangePrice1) = _getExchangePrices(dexKey_.token1);
-        
-        // Get token indices
-        v_.token0Index = _tokenIndex[dexKey_.token0];
-        v_.token1Index = _tokenIndex[dexKey_.token1];
         
         // Get decimals from token configs
         v_.token0Decimals = (_tokenConfigs[NO_EMODE][v_.token0Index] >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS) & X5;
@@ -837,6 +905,7 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
         // Get token indices
         v_.token0Index = _tokenIndex[token0_];
         v_.token1Index = _tokenIndex[token1_];
+        if (v_.token0Index == 0 || v_.token1Index == 0) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
         
         // Get decimals from token configs
         v_.token0Decimals = (_tokenConfigs[NO_EMODE][v_.token0Index] >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS) & X5;
@@ -898,6 +967,7 @@ contract FluidMoneyMarketAdminModuleImplementation is CommonImport {
         // Get token indices
         v_.token0Index = _tokenIndex[token0_];
         v_.token1Index = _tokenIndex[token1_];
+        if (v_.token0Index == 0 || v_.token1Index == 0) revert FluidMoneyMarketError(ErrorTypes.AdminModule__InvalidParams);
         
         // Get decimals from token configs
         v_.token0Decimals = (_tokenConfigs[NO_EMODE][v_.token0Index] >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS) & X5;

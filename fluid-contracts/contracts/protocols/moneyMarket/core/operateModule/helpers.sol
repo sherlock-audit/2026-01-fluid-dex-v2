@@ -1,9 +1,43 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./events.sol";
 
 abstract contract Helpers is CommonImport {
+    function _executeSupply(address token_, uint256 amount_, uint256 tokenIndex_, bytes32 actionId_) internal returns (uint256 rawAmount_) {
+        uint256 ethAmount_;
+        if (token_ == NATIVE_TOKEN) {
+            ethAmount_ = amount_;
+            _msgValue -= ethAmount_;
+        }
+        (uint256 exchangePrice_, ) = LIQUIDITY.operate{value: ethAmount_}(
+            token_, SafeCast.toInt256(amount_), 0, address(0), address(0), _encodeLiquidityIdentifier(actionId_)
+        );
+        rawAmount_ = ((amount_ * LC.EXCHANGE_PRICES_PRECISION) - 1) / exchangePrice_;
+        if (rawAmount_ > 0) rawAmount_ -= 1;
+        _checkAndUpdateCapsForNormalSupply(tokenIndex_, rawAmount_);
+    }
+
+    function _updateNormalPositionRaw(uint256 nftId_, uint256 positionIndex_, uint256 positionData_, uint256 rawAmount_) internal {
+        _positionData[nftId_][positionIndex_] =
+            (positionData_ & ~(X64 << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT)) |
+            (rawAmount_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT);
+    }
+
+    function _validateTokenIndex(uint256 tokenIndex_) internal view {
+        if (tokenIndex_ == 0 || tokenIndex_ > (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X12) revert();
+    }
+
+    function _addNormalPosition(
+        uint256 nftId_, uint256 nftConfig_, uint256 positionType_, uint256 tokenIndex_, uint256 tokenRawAmount_
+    ) internal returns (uint256 positionIndex_) {
+        return _addPosition(nftId_, nftConfig_, 
+            (positionType_ << MSL.BITS_POSITION_DATA_POSITION_TYPE) | 
+            (tokenIndex_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_INDEX) |
+            (tokenRawAmount_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT)
+        );
+    }
+
     function _addPosition(uint256 nftId_, uint256 nftConfig_, uint256 positionData_) internal returns (uint256 positionIndex_) {
         positionIndex_ = ((nftConfig_ >> MSL.BITS_NFT_CONFIGS_NUMBER_OF_POSITIONS) & X10) + 1;
 
@@ -63,7 +97,7 @@ abstract contract Helpers is CommonImport {
 
             // Update the isolated collateral flag and isolated collateral index
             // NOTE: Not updating the nftConfig on storage here because the _addPosition function will update it on storage
-            nftConfig_ = (nftConfig_ & ~(X12 << MSL.BITS_NFT_CONFIGS_ISOLATED_COLLATERAL_TOKEN_INDEX)) | 
+            nftConfig_ = (nftConfig_ & ~(X13 << MSL.BITS_NFT_CONFIGS_ISOLATED_COLLATERAL_FLAG)) | 
                 (X1 << MSL.BITS_NFT_CONFIGS_ISOLATED_COLLATERAL_FLAG) |
                 (tokenIndex_ << MSL.BITS_NFT_CONFIGS_ISOLATED_COLLATERAL_TOKEN_INDEX);
         }
@@ -117,34 +151,21 @@ abstract contract Helpers is CommonImport {
         _checkAndUpdatePositionCap(keccak256(abi.encode(NORMAL_BORROW_POSITION_TYPE, tokenIndex_)), tokenRawBorrow_);
     }
 
-    function _createPosition(uint256 nftId_, uint256 nftConfig_, uint256 emode_, bytes calldata actionData_) internal returns (uint256 positionIndex_) {
+    function _createPosition(uint256 nftId_, uint256 nftConfig_, uint256 emode_, bytes memory actionData_) internal returns (uint256 positionIndex_, bytes memory) {
         // First we check which type of position does the user wants to create
         uint256 positionType_ = abi.decode(actionData_, (uint256));
 
         if (positionType_ == NORMAL_SUPPLY_POSITION_TYPE) {
             (, uint256 tokenIndex_, uint256 supplyAmount_) = abi.decode(actionData_, (uint256, uint256, uint256));
-            if (tokenIndex_ == 0 || tokenIndex_ > (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X12) revert();
+            _validateTokenIndex(tokenIndex_);
             _verifyAmountLimits(supplyAmount_);
 
             uint256 tokenRawSupply_;
             {
                 uint256 tokenConfigs_ = _getTokenConfigs(emode_, tokenIndex_);
-                address token_ = address(uint160(tokenConfigs_)); // The first 160 bits of the token configs are the token address
-                if (token_ == address(0)) revert();
 
-                uint256 ethAmount_;
-                if (token_ == NATIVE_TOKEN) {
-                    ethAmount_ = supplyAmount_;
-                    _msgValue -= ethAmount_; // will revert if it goes negative
-                }
-                // Get the supply from the user
-                (uint256 supplyExchangePrice_, ) = LIQUIDITY.operate{value: ethAmount_}(
-                    token_,
-                    int256(supplyAmount_),
-                    0,
-                    address(0),
-                    address(0),
-                    abi.encode(MONEY_MARKET_IDENTIFIER, CREATE_NORMAL_SUPPLY_POSITION_ACTION_IDENTIFIER)
+                tokenRawSupply_ = _executeSupply(
+                    address(uint160(tokenConfigs_)), supplyAmount_, tokenIndex_, CREATE_NORMAL_SUPPLY_POSITION_ACTION_IDENTIFIER
                 );
 
                 {
@@ -156,38 +177,25 @@ abstract contract Helpers is CommonImport {
                         nftConfig_ = _beforeCreatingIsolatedCollateralPosition(nftId_, nftConfig_, tokenIndex_);
                     }
                 }
-                // If collateral class is 1 or 2, then that means a good collateral is being supplied hence we continue
-
-                // rounded down so protocol is on the winning side
-                tokenRawSupply_ = ((uint256(supplyAmount_) * LC.EXCHANGE_PRICES_PRECISION) - 1) / supplyExchangePrice_;
-                if (tokenRawSupply_ > 0) tokenRawSupply_ -= 1;
             }
-
-            _checkAndUpdateCapsForNormalSupply(tokenIndex_, tokenRawSupply_);
 
             // Now we need to update the supply the _positionData mapping
             tokenRawSupply_ = BM.toBigNumber(tokenRawSupply_, DEFAULT_COEFFICIENT_SIZE, DEFAULT_EXPONENT_SIZE, ROUND_DOWN); // rounded down so protocol is on the winning side
-            {
-                uint256 positionData_ = (NORMAL_SUPPLY_POSITION_TYPE << MSL.BITS_POSITION_DATA_POSITION_TYPE) | 
-                    (tokenIndex_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_INDEX) |
-                    (tokenRawSupply_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT);
-
-                // Store the position data on storage
-                positionIndex_ = _addPosition(nftId_, nftConfig_, positionData_);
-            }
+            positionIndex_ = _addNormalPosition(nftId_, nftConfig_, NORMAL_SUPPLY_POSITION_TYPE, tokenIndex_, tokenRawSupply_);
 
             // NOTE: No need to check the health factor as the user is supplying
         } else if (positionType_ == NORMAL_BORROW_POSITION_TYPE) {
             (, uint256 tokenIndex_, uint256 borrowAmount_, address to_) = abi.decode(actionData_, (uint256, uint256, uint256, address));
-            if (tokenIndex_ == 0 || tokenIndex_ > (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X12) revert();
+            _validateTokenIndex(tokenIndex_);
             _verifyAmountLimits(borrowAmount_);
+            if (to_ == address(0)) revert();
 
             address token_;
             {
                 uint256 tokenConfigs_ = _getTokenConfigs(emode_, tokenIndex_);
 
                 token_ = address(uint160(tokenConfigs_)); // The first 160 bits of the token configs are the token address
-                if (token_ == address(0)) revert();
+                // if (token_ == address(0)) revert(); // This check is not needed because we have checked that tokenIndex_ is valid
 
                 if ((tokenConfigs_ >> MSL.BITS_TOKEN_CONFIGS_DEBT_CLASS) & X3 == DEBT_CLASS_NOT_ENABLED) {
                     revert(); // debt not enabled
@@ -206,14 +214,7 @@ abstract contract Helpers is CommonImport {
 
             // Now we need to update the debt amount in the _positionData mapping
             tokenRawBorrow_ = BM.toBigNumber(tokenRawBorrow_, DEFAULT_COEFFICIENT_SIZE, DEFAULT_EXPONENT_SIZE, ROUND_UP); // rounded up so protocol is on the winning side
-            {
-                uint256 positionData_ = (NORMAL_BORROW_POSITION_TYPE << MSL.BITS_POSITION_DATA_POSITION_TYPE) | 
-                    (tokenIndex_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_INDEX) |
-                    (tokenRawBorrow_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT);
-
-                // Store the position data on storage
-                positionIndex_ = _addPosition(nftId_, nftConfig_, positionData_);
-            }
+            positionIndex_ = _addNormalPosition(nftId_, nftConfig_, NORMAL_BORROW_POSITION_TYPE, tokenIndex_, tokenRawBorrow_);
 
             // Check the health factor of the position
             _checkHf(nftId_, IS_OPERATE);
@@ -222,10 +223,10 @@ abstract contract Helpers is CommonImport {
             LIQUIDITY.operate(
                 token_, 
                 0, 
-                int256(borrowAmount_), 
+                SafeCast.toInt256(borrowAmount_), 
                 address(0), 
                 to_, 
-                abi.encode(MONEY_MARKET_IDENTIFIER, CREATE_NORMAL_BORROW_POSITION_ACTION_IDENTIFIER)
+                _encodeLiquidityIdentifier(CREATE_NORMAL_BORROW_POSITION_ACTION_IDENTIFIER)
             );
         } else if (positionType_ == D3_POSITION_TYPE || positionType_ == D4_POSITION_TYPE) {
             (
@@ -233,10 +234,8 @@ abstract contract Helpers is CommonImport {
                 CreateD3D4PositionParams memory p_
             ) = abi.decode(actionData_, (uint256, CreateD3D4PositionParams));
 
-            {
-                uint256 totalTokens_ = (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X12;
-                if (p_.token0Index == 0 || p_.token0Index > totalTokens_ || p_.token1Index == 0 || p_.token1Index > totalTokens_) revert();
-            }
+            _validateTokenIndex(p_.token0Index);
+            _validateTokenIndex(p_.token1Index);
 
             // Make sure that this is not a fee collection operation
             if (p_.amount0 == 0 && p_.amount1 == 0) revert();
@@ -324,10 +323,15 @@ abstract contract Helpers is CommonImport {
                 p_.fee = 0;
             } else if (p_.fee > X17) revert();
 
-            if (p_.tickSpacing > MAX_TICK_SPACING ||
+            if (
+                p_.tickSpacing > MAX_TICK_SPACING ||
                 p_.tickLower >= p_.tickUpper ||
-                p_.tickLower < MIN_TICK ||
-                p_.tickUpper > MAX_TICK
+                p_.tickLower <= MIN_TICK ||
+                p_.tickUpper >= MAX_TICK
+                // NOTE: The below 3 checks are on the dex v2 side
+                // (p_.tickLower % int24(p_.tickSpacing) != 0) ||
+                // (p_.tickUpper % int24(p_.tickSpacing) != 0)
+                // (p_.tickUpper - p_.tickLower > int24(MAX_TICK_RANGE))
             ) revert();
 
             // Build the dex key
@@ -361,29 +365,38 @@ abstract contract Helpers is CommonImport {
                 positionIndex_ = _addPosition(nftId_, nftConfig_, positionData_);
             }
 
-            DEX_V2.startOperation(
-                abi.encode(
-                    dexKey_,
-                    StartOperationParams({
-                        isOperate: IS_OPERATE,
-                        positionType: positionType_,
-                        nftId: nftId_,
-                        nftConfig: nftConfig_,
-                        token0Index: p_.token0Index,
-                        token1Index: p_.token1Index,
-                        positionIndex: positionIndex_,
-                        tickLower: p_.tickLower,
-                        tickUpper: p_.tickUpper,
-                        positionSalt: v_.positionSalt,
-                        emode: emode_,
-                        permissionlessTokens: v_.permissionlessTokens,
-                        actionData: abi.encode(int256(p_.amount0), int256(p_.amount1), p_.amount0Min, p_.amount1Min, p_.to)
-                    })
-                )
-            );
+            {
+                bytes memory result_ = DEX_V2.startOperation(
+                    abi.encode(
+                        dexKey_,
+                        StartOperationParams({
+                            isOperate: IS_OPERATE,
+                            estimate: IS_NOT_ESTIMATE, // estimate is only for liquidate
+                            positionType: positionType_,
+                            nftId: nftId_,
+                            nftConfig: nftConfig_,
+                            token0Index: p_.token0Index,
+                            token1Index: p_.token1Index,
+                            positionIndex: positionIndex_,
+                            tickLower: p_.tickLower,
+                            tickUpper: p_.tickUpper,
+                            positionSalt: v_.positionSalt,
+                            emode: emode_,
+                            permissionlessTokens: v_.permissionlessTokens,
+                            actionData: abi.encode(SafeCast.toInt256(p_.amount0), SafeCast.toInt256(p_.amount1), p_.amount0Min, p_.amount1Min, p_.to)
+                        })
+                    )
+                );
+                (, uint256 actualAmount0_, uint256 actualAmount1_) = abi.decode(result_, (bool, uint256, uint256));
+                p_.amount0 = actualAmount0_;
+                p_.amount1 = actualAmount1_;
+            }
+            actionData_ = abi.encode(positionType_, p_);
         } else {
             revert(); // Invalid position type
         }
+
+        return (positionIndex_, actionData_);
     }
 
     function _processNormalSupplyAction(
@@ -393,12 +406,12 @@ abstract contract Helpers is CommonImport {
         uint256 positionData_,
         uint256 emode_,
         bytes calldata actionData_
-    ) internal {
+    ) internal returns (bytes memory) {
         uint256 tokenIndex_ = (positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_INDEX) & X12;
-        // if (tokenIndex_ >= (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X14) revert(); // This check is not needed because we got the tokenIndex_ from the position data only
+        // if (tokenIndex_ == 0 || tokenIndex_ > (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X14) revert(); // This check is not needed because we got the tokenIndex_ from the position data only
 
         address token_ = address(uint160(_getTokenConfigs(emode_, tokenIndex_))); // The first 160 bits of the token configs are the token address
-        if (token_ == address(0)) revert();
+        // if (token_ == address(0)) revert(); // This check is not needed because we got the token_ from the position data only
 
         uint256 tokenRawSupply_ = (positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT) & X64;
         tokenRawSupply_ = BM.fromBigNumber(tokenRawSupply_, DEFAULT_EXPONENT_SIZE, DEFAULT_EXPONENT_MASK);
@@ -411,35 +424,13 @@ abstract contract Helpers is CommonImport {
             // Get the supply from the user
 
             _verifyAmountLimits(supplyAmount_);
-            
-            if (token_ == NATIVE_TOKEN) {
-                _msgValue -= uint256(supplyAmount_); // will revert if it goes negative
-            }
 
-            uint256 supplyAmountRaw_;
             {
-                (uint256 supplyExchangePrice_, ) = LIQUIDITY.operate{value: token_ == NATIVE_TOKEN ? uint256(supplyAmount_) : 0 }(
-                    token_, 
-                    supplyAmount_, 
-                    0, 
-                    address(0), 
-                    address(0), 
-                    abi.encode(MONEY_MARKET_IDENTIFIER, NORMAL_SUPPLY_ACTION_IDENTIFIER)
-                );
-
-                // rounded down so protocol is on the winning side
-                supplyAmountRaw_ = ((uint256(supplyAmount_) * LC.EXCHANGE_PRICES_PRECISION) - 1) / supplyExchangePrice_;
-                if (supplyAmountRaw_ > 0) supplyAmountRaw_ -= 1;
+                uint256 supplyAmountRaw_ = _executeSupply(token_, uint256(supplyAmount_), tokenIndex_, NORMAL_SUPPLY_ACTION_IDENTIFIER);
+                tokenRawSupply_ += supplyAmountRaw_;
             }
-
-            _checkAndUpdateCapsForNormalSupply(tokenIndex_, supplyAmountRaw_);
-
-            // Update the supply in position data
-            tokenRawSupply_ += supplyAmountRaw_;
             tokenRawSupply_ = BM.toBigNumber(tokenRawSupply_, DEFAULT_COEFFICIENT_SIZE, DEFAULT_EXPONENT_SIZE, ROUND_DOWN); // rounded down so protocol is on the winning side
-            _positionData[nftId_][positionIndex_] =
-                (positionData_ & ~(X64 << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT)) |
-                (tokenRawSupply_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT);
+            _updateNormalPositionRaw(nftId_, positionIndex_, positionData_, tokenRawSupply_);
 
             // No need to check the health factor if the user is supplying
             // _checkHf(nftId_, IS_OPERATE);
@@ -447,21 +438,20 @@ abstract contract Helpers is CommonImport {
             // User is withdrawing
             (uint256 supplyExchangePrice_, ) = _getExchangePrices(token_);
 
-            // Check if user wants to withdraw all
             uint256 withdrawAmountRaw_;
-            if (supplyAmount_ == type(int256).min) {
-                withdrawAmountRaw_ = tokenRawSupply_; // Full amount will be withdrawn
-                // Calculate the actual withdraw amount
+            if (supplyAmount_ != type(int256).min) {
+                withdrawAmountRaw_ = (((uint256(-supplyAmount_) * LC.EXCHANGE_PRICES_PRECISION) + 1) / supplyExchangePrice_) + 1; // rounded up so protocol is on the winning side
+            }
+            if (supplyAmount_ == type(int256).min || withdrawAmountRaw_ > tokenRawSupply_) {
+                withdrawAmountRaw_ = tokenRawSupply_;
                 // rounded down so protocol is on the winning side
                 uint256 withdrawAmount_ = ((tokenRawSupply_ * supplyExchangePrice_) - 1) / LC.EXCHANGE_PRICES_PRECISION;
                 if (withdrawAmount_ > 0) withdrawAmount_ -= 1;
-                supplyAmount_ = -int256(withdrawAmount_);
-            } else {
-                withdrawAmountRaw_ = (((uint256(-supplyAmount_) * LC.EXCHANGE_PRICES_PRECISION) + 1) / supplyExchangePrice_) + 1; // rounded up so protocol is on the winning side
-                if (withdrawAmountRaw_ > tokenRawSupply_) withdrawAmountRaw_ = tokenRawSupply_; // added this check for safety
+                supplyAmount_ = -SafeCast.toInt256(withdrawAmount_);
             }
 
             _verifyAmountLimits(supplyAmount_);
+            if (to_ == address(0)) revert();
 
             _updateStorageForWithdraw(
                 nftId_, 
@@ -477,8 +467,10 @@ abstract contract Helpers is CommonImport {
             _checkHf(nftId_, IS_OPERATE);
 
             // Give the withdraw to the user
-            LIQUIDITY.operate(token_, supplyAmount_, 0, to_, address(0), abi.encode(MONEY_MARKET_IDENTIFIER, NORMAL_WITHDRAW_ACTION_IDENTIFIER));
+            LIQUIDITY.operate(token_, supplyAmount_, 0, to_, address(0), _encodeLiquidityIdentifier(NORMAL_WITHDRAW_ACTION_IDENTIFIER));
         }
+
+        return abi.encode(supplyAmount_, to_);
     }
 
     function _processNormalBorrowAction(
@@ -488,13 +480,13 @@ abstract contract Helpers is CommonImport {
         uint256 positionData_,
         uint256 emode_,
         bytes calldata actionData_
-    ) internal {
+    ) internal returns (bytes memory) {
         uint256 tokenIndex_ = (positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_INDEX) & X12;
         // NOTE: This check is not needed because we got the tokenIndex_ from the position data only
-        // if (tokenIndex_ >= (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X14) revert();
+        // if (tokenIndex_ == 0 || tokenIndex_ > (_moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_TOTAL_TOKENS) & X14) revert();
 
         address token_ = address(uint160(_getTokenConfigs(emode_, tokenIndex_))); // The first 160 bits of the token configs are the token address
-        if (token_ == address(0)) revert();
+        // if (token_ == address(0)) revert(); // This check is not needed because we got the token_ from the position data only
 
         uint256 tokenRawBorrow_ = (positionData_ >> MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT) & X64;
         tokenRawBorrow_ = BM.fromBigNumber(tokenRawBorrow_, DEFAULT_EXPONENT_SIZE, DEFAULT_EXPONENT_MASK);
@@ -504,35 +496,36 @@ abstract contract Helpers is CommonImport {
 
         if (borrowAmount_ > 0) {
             _verifyAmountLimits(borrowAmount_);
+            if (to_ == address(0)) revert();
 
             _validateDebtForEmode(emode_, tokenIndex_);
 
             // User is borrowing
             // Update the borrow on storage
-            uint256 borrowAmountRaw_;
             {
-                (, uint256 borrowExchangePrice_) = _getExchangePrices(token_);
-                borrowAmountRaw_ = (((uint256(borrowAmount_) * LC.EXCHANGE_PRICES_PRECISION) + 1) / borrowExchangePrice_) + 1; // rounded up so protocol is on the winning side
+                uint256 borrowAmountRaw_;
+                {
+                    (, uint256 borrowExchangePrice_) = _getExchangePrices(token_);
+                    borrowAmountRaw_ = (((uint256(borrowAmount_) * LC.EXCHANGE_PRICES_PRECISION) + 1) / borrowExchangePrice_) + 1; // rounded up so protocol is on the winning side
+                }
+
+                _checkAndUpdateCapsForNormalBorrow(nftConfig_, tokenIndex_, borrowAmountRaw_);
+
+                // Now we need to update the borrow in position data
+                tokenRawBorrow_ += borrowAmountRaw_;
             }
-
-            _checkAndUpdateCapsForNormalBorrow(nftConfig_, tokenIndex_, borrowAmountRaw_);
-
-            // Now we need to update the borrow in position data
-            tokenRawBorrow_ += borrowAmountRaw_;
             tokenRawBorrow_ = BM.toBigNumber(tokenRawBorrow_, DEFAULT_COEFFICIENT_SIZE, DEFAULT_EXPONENT_SIZE, ROUND_UP); // rounded up so protocol is on the winning side
-            _positionData[nftId_][positionIndex_] =
-                (positionData_ & ~(X64 << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT)) |
-                (tokenRawBorrow_ << MSL.BITS_POSITION_DATA_POSITION_TYPE_1_AND_2_TOKEN_RAW_AMOUNT);
+            _updateNormalPositionRaw(nftId_, positionIndex_, positionData_, tokenRawBorrow_);
 
             // Check the health factor of the position
             _checkHf(nftId_, IS_OPERATE);
 
             // Give the borrow to the user
-            LIQUIDITY.operate(token_, 0, borrowAmount_, address(0), to_, abi.encode(MONEY_MARKET_IDENTIFIER, NORMAL_BORROW_ACTION_IDENTIFIER));
+            LIQUIDITY.operate(token_, 0, borrowAmount_, address(0), to_, _encodeLiquidityIdentifier(NORMAL_BORROW_ACTION_IDENTIFIER));
         } else {
             // User is paying back
             // Get the pay back from the user
-            
+
             (, uint256 borrowExchangePrice_) = _getExchangePrices(token_);
 
             // Check if user wants to pay back all
@@ -545,25 +538,27 @@ abstract contract Helpers is CommonImport {
                 // rounded down so protocol is on the winning side
                 paybackAmountRaw_ = ((uint256(-borrowAmount_) * LC.EXCHANGE_PRICES_PRECISION) - 1) / borrowExchangePrice_;
                 if (paybackAmountRaw_ > 0) paybackAmountRaw_ -= 1;
-            }
+            } 
 
             _verifyAmountLimits(borrowAmount_);
 
             // Update ethAmount if native token
-            uint256 ethAmount_;
-            if (token_ == NATIVE_TOKEN) {
-                ethAmount_ = uint256(-borrowAmount_);
-                _msgValue -= ethAmount_; // will revert if it goes negative
-            }
+            {
+                uint256 ethAmount_;
+                if (token_ == NATIVE_TOKEN) {
+                    ethAmount_ = uint256(-borrowAmount_);
+                    _msgValue -= ethAmount_; // will revert if it goes negative
+                }
 
-            LIQUIDITY.operate{value: ethAmount_}(
-                token_, 
-                0, 
-                borrowAmount_, 
-                address(0), 
-                address(0), 
-                abi.encode(MONEY_MARKET_IDENTIFIER, NORMAL_PAYBACK_ACTION_IDENTIFIER)
-            );
+                LIQUIDITY.operate{value: ethAmount_}(
+                    token_, 
+                    0, 
+                    borrowAmount_, 
+                    address(0), 
+                    address(0), 
+                    _encodeLiquidityIdentifier(NORMAL_PAYBACK_ACTION_IDENTIFIER)
+                );
+            }
 
             _updateStorageForPayback(
                 nftId_, 
@@ -577,6 +572,31 @@ abstract contract Helpers is CommonImport {
 
             // No need to check the health factor if the user is paying back
             // _checkHf(nftId_, IS_OPERATE);
+        }
+
+        return abi.encode(borrowAmount_, to_);
+    }
+
+    function _reconstructD3D4ActionData(
+        bytes calldata actionData_,
+        bytes memory result_
+    ) internal pure returns (bytes memory) {
+        (int256 amount0_, int256 amount1_, , , address to_) = abi.decode(
+            actionData_,
+            (int256, int256, uint256, uint256, address)
+        );
+        (, uint256 actualAmount0_, uint256 actualAmount1_) = abi.decode(result_, (bool, uint256, uint256));
+
+        if (amount0_ == 0 && amount1_ == 0) {
+            return abi.encode(int256(0), int256(0), actualAmount0_, actualAmount1_, to_);
+        } else {
+            return abi.encode(
+                amount0_ >= 0 ? int256(actualAmount0_) : -int256(actualAmount0_),
+                amount1_ >= 0 ? int256(actualAmount1_) : -int256(actualAmount1_),
+                uint256(0),
+                uint256(0),
+                to_
+            );
         }
     }
 }

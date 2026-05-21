@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./helpers.sol";
 
@@ -50,19 +50,27 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
         if (params_.to == address(0)) params_.to = msg.sender;
 
         LiquidateVariables memory v_;
+        bytes32 positionSalt_ = keccak256(abi.encode(params_.nftId));
         v_.moneyMarketVariables = _moneyMarketVariables;
-        v_.oracle = IOracle(address(uint160(v_.moneyMarketVariables))); // The first 160 bits of the token configs are the token address
+        v_.oracle = IMMOracle(address(uint160(v_.moneyMarketVariables))); // The first 160 bits of the token configs are the token address
 
         {
             HfInfo memory hfInfo_ = _getHfInfo(params_.nftId, IS_LIQUIDATE);
-            if (hfInfo_.hf >= EIGHTEEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__NotLiquidatable);
+            if (hfInfo_.hf >= TWENTY_SEVEN_DECIMALS) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__NotLiquidatable);
 
             if (hfInfo_.collateralValue < hfInfo_.debtValue) {
                 v_.maxLiquidationPenalty = 0;
             } else {
                 v_.maxLiquidationPenalty = ((hfInfo_.collateralValue - hfInfo_.debtValue) * THREE_DECIMALS) / hfInfo_.debtValue;
-                if (v_.maxLiquidationPenalty > 0) v_.maxLiquidationPenalty -= 1; // Explicitly rounding down max LP by 0.1%
+                if (v_.maxLiquidationPenalty > 0) {
+                    unchecked {
+                        v_.maxLiquidationPenalty -= 1; // Explicitly rounding down max LP by 0.1%
+                    }
+                }
             }
+
+            v_.debtValueBefore = hfInfo_.debtValue;
+            v_.normalizedCollateralValueBefore = hfInfo_.normalizedCollateralValue;
         }
 
         v_.nftConfig = _nftConfigs[params_.nftId];
@@ -134,14 +142,16 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                     }
                 }
 
-                LIQUIDITY.operate{value: ethAmount_}(
-                    token_, 
-                    0, 
-                    -int256(paybackAmount_), 
-                    address(0), 
-                    address(0), 
-                    abi.encode(MONEY_MARKET_IDENTIFIER, LIQUIDATE_NORMAL_PAYBACK_ACTION_IDENTIFIER)
-                );
+                if (!params_.estimate) {
+                    LIQUIDITY.operate{value: ethAmount_}(
+                        token_, 
+                        0, 
+                        -SafeCast.toInt256(paybackAmount_), 
+                        address(0), 
+                        address(0), 
+                        _encodeLiquidityIdentifier(LIQUIDATE_NORMAL_PAYBACK_ACTION_IDENTIFIER)
+                    );
+                }
             }
 
             v_.positionDeleted = _updateStorageForPayback(
@@ -169,6 +179,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             DexKey memory dexKey_;
             StartOperationParams memory s_ =  StartOperationParams({
                 isOperate: IS_LIQUIDATE,
+                estimate: params_.estimate,
                 positionType: v_.paybackPositionType,
                 nftId: params_.nftId,
                 nftConfig: v_.nftConfig,
@@ -177,20 +188,23 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                 positionIndex: params_.paybackPositionIndex,
                 tickLower: 0,
                 tickUpper: 0,
-                positionSalt: keccak256(abi.encode(params_.nftId)),
+                positionSalt: positionSalt_,
                 emode: v_.emode,
                 permissionlessTokens: false, // passing permissionless tokens as false because it doesn't matter because its a payback operation
-                actionData: abi.encode(-int256(paybackAmount0_), -int256(paybackAmount1_), paybackAmount0Min_, paybackAmount1Min_, address(0))
+                actionData: abi.encode(-SafeCast.toInt256(paybackAmount0_), -SafeCast.toInt256(paybackAmount1_), paybackAmount0Min_, paybackAmount1Min_, address(0))
             });
+
+            uint256 token0Configs_ = _getTokenConfigs(v_.emode, s_.token0Index);
+            uint256 token1Configs_ = _getTokenConfigs(v_.emode, s_.token1Index);
 
             (dexKey_, s_.tickLower, s_.tickUpper) = _decodeD3D4PositionData(
                 v_.paybackPositionData, 
-                _getTokenConfigs(v_.emode, s_.token0Index), 
-                _getTokenConfigs(v_.emode, s_.token1Index)
+                token0Configs_, 
+                token1Configs_
             );
 
             (v_.positionDeleted, paybackAmount0_, paybackAmount1_) = abi.decode(
-                DEX_V2.startOperation(abi.encode(dexKey_, s_)), 
+                _startOperationWithEstimate(abi.encode(dexKey_, s_), params_.estimate), 
                 (bool, uint256, uint256)
             );
 
@@ -199,7 +213,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             uint256 token0Price_ = _getPrice(
                 v_.oracle,
                 dexKey_.token0,
-                _getTokenConfigs(v_.emode, s_.token0Index) >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS & X5,
+                token0Configs_ >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS & X5,
                 v_.emode,
                 IS_LIQUIDATE,
                 IS_DEBT
@@ -207,7 +221,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             uint256 token1Price_ = _getPrice(
                 v_.oracle,
                 dexKey_.token1,
-                _getTokenConfigs(v_.emode, s_.token1Index) >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS & X5,
+                token1Configs_ >> MSL.BITS_TOKEN_CONFIGS_TOKEN_DECIMALS & X5,
                 v_.emode,
                 IS_LIQUIDATE,
                 IS_DEBT
@@ -233,7 +247,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
         }
         
         // NOTE: Payback of less than $0.01 i.e. 1 cent is not allowed
-        if (v_.paybackValue < 1e16) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__InvalidParams);
+        if (v_.paybackValue < 1e25) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__InvalidParams);
 
         if (v_.positionDeleted && params_.withdrawPositionIndex == v_.numberOfPositions) {
             // This means that the withdraw position was the last position, and when the payback position got deleted, its position index got changed
@@ -291,7 +305,11 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                         vl_.withdrawAmount = ((v_.withdrawValue * EIGHTEEN_DECIMALS) - 1) / vl_.tokenPrice;
                         if (vl_.withdrawAmount > 0) vl_.withdrawAmount -= 1;
                         vl_.withdrawAmountRaw = (((vl_.withdrawAmount * LC.EXCHANGE_PRICES_PRECISION) + 1) / supplyExchangePrice_) + 1; // rounded up so protocol is on the winning side
-                        if (vl_.withdrawAmountRaw > vl_.rawSupplyAmount) vl_.withdrawAmountRaw = vl_.rawSupplyAmount; // added this check for safety
+                        if (vl_.withdrawAmountRaw > vl_.rawSupplyAmount) {
+                            vl_.withdrawAmountRaw = vl_.rawSupplyAmount;
+                            vl_.withdrawAmount = ((vl_.rawSupplyAmount * supplyExchangePrice_) - 1) / LC.EXCHANGE_PRICES_PRECISION;
+                            if (vl_.withdrawAmount > 0) vl_.withdrawAmount -= 1;
+                        }
                     }
                 }
             }
@@ -307,13 +325,16 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             );
 
             // Give the withdraw to the user
-            LIQUIDITY.operate(vl_.token, -int256(vl_.withdrawAmount), 0, params_.to, address(0), abi.encode(MONEY_MARKET_IDENTIFIER, LIQUIDATE_NORMAL_WITHDRAW_ACTION_IDENTIFIER));
+            if (!params_.estimate) {
+                LIQUIDITY.operate(vl_.token, -SafeCast.toInt256(vl_.withdrawAmount), 0, params_.to, address(0), _encodeLiquidityIdentifier(LIQUIDATE_NORMAL_WITHDRAW_ACTION_IDENTIFIER));
+            }
 
             withdrawData_ = abi.encode(vl_.withdrawAmount);
         } else if (v_.withdrawPositionType == D3_POSITION_TYPE) {
             DexKey memory dexKey_;
             StartOperationParams memory s_ = StartOperationParams({
                 isOperate: IS_LIQUIDATE,
+                estimate: params_.estimate,
                 positionType: D3_POSITION_TYPE,
                 nftId: params_.nftId,
                 nftConfig: _nftConfigs[params_.nftId], // using directly from storage because payback might have changed it
@@ -322,7 +343,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                 positionIndex: params_.withdrawPositionIndex,
                 tickLower: 0,
                 tickUpper: 0,
-                positionSalt: keccak256(abi.encode(params_.nftId)),
+                positionSalt: positionSalt_,
                 emode: v_.emode,
                 permissionlessTokens: false, // passing permissionless tokens as false because it doesn't matter because its a withdraw operation
                 actionData: "" // will be set when needed
@@ -410,10 +431,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                     uint256 supplyValue1_ = (((vl_.token1SupplyAmount * vl_.token1Price) + 1) / EIGHTEEN_DECIMALS) + 1; // rounded up so protocol is on the winning side
 
                     supplyValue_ = supplyValue0_ + supplyValue1_;
-                    averageLiquidationPenalty_ = (
-                        (vl_.token0LiquidationPenalty * supplyValue0_) + 
-                        (vl_.token1LiquidationPenalty * supplyValue1_)
-                    ) / supplyValue_;
+                    averageLiquidationPenalty_ = (vl_.token0LiquidationPenalty + vl_.token1LiquidationPenalty) / 2;
                 }
 
                 // Scaling up the withdraw value by the average liquidation penalty
@@ -425,8 +443,6 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                     // if one of the amounts is very small that it rounds to 0, then adding 1 here makes sure that the withdraw is actually happening
                     if (vl_.token0SupplyAmount == 0) vl_.token0SupplyAmount = 1;
                     if (vl_.token1SupplyAmount == 0) vl_.token1SupplyAmount = 1;
-
-                    s_.actionData = abi.encode(-int256(vl_.token0SupplyAmount), -int256(vl_.token1SupplyAmount), 0, 0, params_.to);
 
                     v_.withdrawValue -= supplyValue_;
 
@@ -464,21 +480,21 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                             vl_.token1SupplyAmount = 1;
                         }
                     }
-                    
-                    s_.actionData = abi.encode(-int256(vl_.token0SupplyAmount), -int256(vl_.token1SupplyAmount), 0, 0, params_.to);
 
                     // The entire withdraw value was consumed
                     v_.withdrawValue = 0;
                 }
 
+                s_.actionData = abi.encode(-SafeCast.toInt256(vl_.token0SupplyAmount), -SafeCast.toInt256(vl_.token1SupplyAmount), 0, 0, params_.to);
+
                 (, vl_.withdrawAmount0, vl_.withdrawAmount1) = abi.decode(
-                    DEX_V2.startOperation(abi.encode(dexKey_, s_)),
+                    _startOperationWithEstimate(abi.encode(dexKey_, s_), params_.estimate),
                     (bool, uint256, uint256)
                 );
             }
 
-            // NOTE: We will process further withdrawal using fee stored only if the withdraw value is greater than $0.01 i.e. 1 cent
-            if (v_.withdrawValue > 1e16) {
+            // NOTE: We will process further withdrawal using fee stored only if the withdraw value is greater than $0.01 i.e. 1 cent (1e25 in 27 decimals)
+            if (v_.withdrawValue > 1e25) {
                 if (!(vl_.feeAmountToken0 == 0 && vl_.feeAmountToken1 == 0)) {
                     (vl_.feeAmountToken0, vl_.feeAmountToken1) = _useFeeStoredForLiquidation(
                         vl_.feeAmountToken0,
@@ -491,7 +507,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                     );
 
                     s_.actionData = abi.encode(0, 0, vl_.feeAmountToken0, vl_.feeAmountToken1, params_.to);
-                    DEX_V2.startOperation(abi.encode(dexKey_, s_));
+                    _startOperationWithEstimate(abi.encode(dexKey_, s_), params_.estimate);
 
                     vl_.withdrawAmount0 += vl_.feeAmountToken0;
                     vl_.withdrawAmount1 += vl_.feeAmountToken1;
@@ -506,6 +522,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             DexKey memory dexKey_;
             StartOperationParams memory s_ = StartOperationParams({
                 isOperate: IS_LIQUIDATE,
+                estimate: params_.estimate,
                 positionType: D4_POSITION_TYPE,
                 nftId: params_.nftId,
                 nftConfig: _nftConfigs[params_.nftId], // using directly from storage because payback might have changed it
@@ -514,7 +531,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                 positionIndex: params_.withdrawPositionIndex,
                 tickLower: 0,
                 tickUpper: 0,
-                positionSalt: keccak256(abi.encode(params_.nftId)),
+                positionSalt: positionSalt_,
                 emode: v_.emode,
                 permissionlessTokens: false, // passing permissionless tokens as false because it doesn't matter because its a fee collection operation
                 actionData: "" // will be set when needed
@@ -608,7 +625,7 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
                 }
 
                 s_.actionData = abi.encode(0, 0, feeAmountToken0_, feeAmountToken1_, params_.to);
-                DEX_V2.startOperation(abi.encode(dexKey_, s_));
+                _startOperationWithEstimate(abi.encode(dexKey_, s_), params_.estimate);
 
                 withdrawData_ = abi.encode(feeAmountToken0_, feeAmountToken1_);
             } else {
@@ -623,12 +640,40 @@ contract FluidMoneyMarketLiquidateModule is Helpers {
             uint256 hfLimit_ = (v_.moneyMarketVariables >> MSL.BITS_MONEY_MARKET_VARIABLES_HF_LIMIT_FOR_LIQUIDATION) & X18;
             hfLimit_ = BM.fromBigNumber(hfLimit_, DEFAULT_EXPONENT_SIZE, DEFAULT_EXPONENT_MASK);
 
-            if (_getHfInfo(params_.nftId, IS_LIQUIDATE).hf > hfLimit_) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__HfLimitExceeded);
+            HfInfo memory hfInfo_ = _getHfInfo(params_.nftId, IS_LIQUIDATE);
+            if (hfInfo_.debtValue != 0) {
+                if (hfInfo_.hf > hfLimit_) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__HfLimitExceeded);
+
+                // HF can decrease during risk-reducing liquidations; shortfall tracks absolute bad-debt exposure.
+                uint256 shortfallBefore_;
+                uint256 shortfallAfter_;
+                unchecked {
+                    if (v_.debtValueBefore > v_.normalizedCollateralValueBefore) {
+                        shortfallBefore_ = v_.debtValueBefore - v_.normalizedCollateralValueBefore;
+                    }
+
+                    if (hfInfo_.debtValue > hfInfo_.normalizedCollateralValue) {
+                        shortfallAfter_ = hfInfo_.debtValue - hfInfo_.normalizedCollateralValue;
+                    }
+                }
+
+                if (shortfallAfter_ > shortfallBefore_) revert FluidMoneyMarketError(ErrorTypes.LiquidateModule__ShortfallIncreased);
+            }
         }
 
         if (params_.estimate) {
             revert FluidLiquidateEstimate(params_.paybackData, withdrawData_);
         }
+
+        emit LogLiquidate(
+            params_.nftId,
+            msg.sender,
+            params_.paybackPositionIndex,
+            params_.withdrawPositionIndex,
+            params_.to,
+            params_.paybackData,
+            withdrawData_
+        );
 
         return (params_.paybackData, withdrawData_);
     }

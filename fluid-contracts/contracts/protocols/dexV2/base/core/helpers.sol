@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import { BigMathMinified as BM } from "../../../../libraries/bigMathMinified.sol";
 import { DexV2BaseSlotsLink as DSL } from "../../../../libraries/dexV2BaseSlotsLink.sol";
@@ -9,6 +9,7 @@ import { PendingTransfers as PT } from "../../../../libraries/pendingTransfers.s
 import { SafeTransfer } from "../../../../libraries/safeTransfer.sol";
 import { OperationControl as OC } from "../../../../libraries/operationControl.sol";
 import { ReentrancyLock } from "../../../../libraries/reentrancyLock.sol";
+import { SafeCast } from "../../../../libraries/safeCast.sol";
 import "../other/commonImport.sol";
 
 abstract contract Helpers is CommonImport {
@@ -59,7 +60,7 @@ abstract contract Helpers is CommonImport {
         if (borrowAmount_ != 0) PT.addPendingBorrow(msg.sender, token_, -borrowAmount_);
         if (storeAmount_ != 0) {
             // update user stored token amount
-            int256 storedTokenAmount_ = int256(_userStoredTokenAmount[BASE_SLOT][msg.sender][token_]) + storeAmount_;
+            int256 storedTokenAmount_ = SafeCast.toInt256(_userStoredTokenAmount[BASE_SLOT][msg.sender][token_]) + storeAmount_;
             if (storedTokenAmount_ < 0) {
                 revert FluidDexV2Error(ErrorTypes.DexV2Helpers__StoredTokenAmountNegative);
             }

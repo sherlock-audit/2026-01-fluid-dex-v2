@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.29;
+pragma solidity 0.8.34;
 
 import "./error.sol";
 
@@ -82,4 +82,7 @@ abstract contract CommonConstantVariables {
 
     bool internal constant IS_SMART_COLLATERAL = true;
     bool internal constant IS_SMART_DEBT = false;
+
+    uint256 internal constant MAX_CONTROLLER_DATA_LENGTH = 10000;
+    uint256 internal constant CONTROLLER_FEE_FETCH_GAS = 200000;
 }
